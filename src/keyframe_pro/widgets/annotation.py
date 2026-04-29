@@ -3,9 +3,9 @@ from __future__ import annotations
 from typing import Optional
 from PySide6.QtCore import Qt, QPointF, Signal
 from PySide6.QtGui import (
-    QPainter, QColor, QPen, QBrush, QMouseEvent, QPixmap, QPainterPath
+    QPainter, QColor, QPen, QBrush, QMouseEvent, QPixmap, QPainterPath, QFont
 )
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QWidget, QInputDialog, QLineEdit
 
 from ..core.annotations import AnnotationModel, Stroke
 
@@ -26,6 +26,7 @@ class AnnotationOverlay(QWidget):
     TOOL_ELLIPSE = "ellipse"
     TOOL_ERASER = "eraser"
     TOOL_LASER = "laser"
+    TOOL_TEXT = "text"
 
     def __init__(self, model: AnnotationModel, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -114,10 +115,30 @@ class AnnotationOverlay(QWidget):
             # Erase last stroke on this frame
             self._model.remove_last(self._frame)
             return
+        if self._tool == self.TOOL_TEXT and ev.button() == Qt.LeftButton:
+            self._add_text_at(ev.position())
+            return
         if ev.button() == Qt.LeftButton:
             self._drawing = True
             self._current_points = [self._to_norm(ev.position())]
             self.update()
+
+    def _add_text_at(self, pos: QPointF) -> None:
+        text, ok = QInputDialog.getText(
+            self, "Text annotation", "Text:", QLineEdit.Normal, ""
+        )
+        if not ok or not text.strip():
+            return
+        stroke = Stroke(
+            points=[self._to_norm(pos)],
+            color=self._color.name(),
+            width=self._width,
+            layer=self._layer,
+            tool=self.TOOL_TEXT,
+            text=text.strip(),
+            text_size=max(8, int(self._width * 6)),  # scale with width control
+        )
+        self._model.add_stroke(self._frame, stroke)
 
     def mouseMoveEvent(self, ev: QMouseEvent) -> None:
         if not self._active:
@@ -213,6 +234,20 @@ class AnnotationOverlay(QWidget):
                     int(abs(b.x() - a.x())),
                     int(abs(b.y() - a.y())),
                 )
+        elif stroke.tool == self.TOOL_TEXT:
+            if not stroke.points or not stroke.text:
+                return
+            anchor = self._from_norm(stroke.points[0])
+            font = QFont()
+            font.setPointSize(int(stroke.text_size))
+            font.setBold(True)
+            p.setFont(font)
+            # Black drop-shadow for readability
+            shadow = QColor(0, 0, 0, int(180 * alpha))
+            p.setPen(QPen(shadow))
+            p.drawText(anchor + QPointF(1, 1), stroke.text)
+            p.setPen(QPen(col))
+            p.drawText(anchor, stroke.text)
 
     def paintEvent(self, _ev) -> None:
         p = QPainter(self)

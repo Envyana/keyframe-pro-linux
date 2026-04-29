@@ -11,7 +11,9 @@ class Stroke:
     color: str = "#ff2222"
     width: float = 3.0
     layer: str = "fg"  # 'fg' or 'bg'
-    tool: str = "pen"  # 'pen' | 'highlighter' | 'arrow' | 'rect' | 'ellipse'
+    tool: str = "pen"  # 'pen' | 'highlighter' | 'arrow' | 'rect' | 'ellipse' | 'text'
+    text: str = ""     # only used when tool == 'text'
+    text_size: int = 18
 
     def to_dict(self) -> dict:
         return {
@@ -20,6 +22,8 @@ class Stroke:
             "width": self.width,
             "layer": self.layer,
             "tool": self.tool,
+            "text": self.text,
+            "text_size": self.text_size,
         }
 
     @classmethod
@@ -30,6 +34,8 @@ class Stroke:
             width=float(d.get("width", 3.0)),
             layer=d.get("layer", "fg"),
             tool=d.get("tool", "pen"),
+            text=d.get("text", ""),
+            text_size=int(d.get("text_size", 18)),
         )
 
 
