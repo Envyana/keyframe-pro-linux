@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget,
-    QTableWidgetItem, QHeaderView, QKeySequenceEdit, QMessageBox, QLabel
+    QTableWidgetItem, QHeaderView, QKeySequenceEdit, QMessageBox, QLabel,
+    QFileDialog
 )
 
 from ..core.settings import Settings, DEFAULT_HOTKEYS
@@ -57,6 +59,12 @@ class PreferencesDialog(QDialog):
         self.btn_reset = QPushButton("Reset to Defaults")
         self.btn_reset.clicked.connect(self._on_reset)
         btn_row.addWidget(self.btn_reset)
+        self.btn_import = QPushButton("Import…")
+        self.btn_import.clicked.connect(self._on_import)
+        self.btn_export = QPushButton("Export…")
+        self.btn_export.clicked.connect(self._on_export)
+        btn_row.addWidget(self.btn_import)
+        btn_row.addWidget(self.btn_export)
         btn_row.addStretch(1)
         self.btn_apply = QPushButton("Apply")
         self.btn_apply.clicked.connect(self._apply)
@@ -76,6 +84,46 @@ class PreferencesDialog(QDialog):
             return
         for action_id, (default, _) in DEFAULT_HOTKEYS.items():
             self._editors[action_id].setKeySequence(QKeySequence(default))
+
+    def _on_export(self) -> None:
+        # First save current edits so the export reflects what's on screen.
+        if not self._apply():
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export preset",
+            str(Path.home() / "keyframe-pro-preset.json"),
+            "Preset (*.json);;All files (*)"
+        )
+        if not path:
+            return
+        if not path.endswith(".json"):
+            path += ".json"
+        try:
+            self._settings.export_preset(path, include_recent=False)
+            QMessageBox.information(self, "Export", f"Preset written to:\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Export failed", str(e))
+
+    def _on_import(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import preset", str(Path.home()),
+            "Preset (*.json);;All files (*)"
+        )
+        if not path:
+            return
+        try:
+            summary = self._settings.import_preset(path)
+        except Exception as e:
+            QMessageBox.critical(self, "Import failed", str(e))
+            return
+        # Refresh editors with the newly-imported values
+        for action_id, ed in self._editors.items():
+            ed.setKeySequence(QKeySequence(self._settings.hotkey(action_id)))
+        QMessageBox.information(
+            self, "Import",
+            f"Applied {summary['applied']} hotkeys "
+            f"(skipped {summary['skipped']} unknown)."
+        )
 
     def _check_conflicts(self) -> bool:
         seen: dict[str, str] = {}

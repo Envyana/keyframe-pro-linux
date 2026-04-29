@@ -1,6 +1,8 @@
 """User settings + customizable hotkeys persisted via QSettings."""
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from PySide6.QtCore import QSettings
 
 
@@ -40,6 +42,7 @@ DEFAULT_HOTKEYS: dict[str, tuple[str, str]] = {
     "zoom_out":         ("-",              "Zoom out"),
     "hud_toggle":       ("H",              "Toggle frame/time HUD"),
     "sync_ann_bm":      ("Ctrl+Shift+B",   "Sync annotation bookmarks"),
+    "timeline_view":    ("\\",             "Toggle global/range timeline view"),
 }
 
 
@@ -93,3 +96,42 @@ class Settings:
 
     def set_value(self, key: str, value) -> None:
         self._s.setValue(key, value)
+
+    # --- preset import/export ---
+
+    PRESET_VERSION = 1
+
+    def export_preset(self, path: str | Path, include_recent: bool = False) -> None:
+        data = {
+            "version": self.PRESET_VERSION,
+            "hotkeys": self.all_hotkeys(),
+        }
+        if include_recent:
+            data["recent_files"] = self.recent_files()
+        Path(path).write_text(json.dumps(data, indent=2))
+
+    def import_preset(self, path: str | Path) -> dict:
+        """Import a preset file. Returns a summary dict.
+
+        Unknown action IDs in the file are ignored. Missing IDs keep their
+        current binding. Recent files are imported only if present in the file.
+        """
+        raw = json.loads(Path(path).read_text())
+        if not isinstance(raw, dict):
+            raise ValueError("Preset file is not a JSON object")
+        if int(raw.get("version", 0)) != self.PRESET_VERSION:
+            raise ValueError(
+                f"Unsupported preset version (file={raw.get('version')}, "
+                f"expected={self.PRESET_VERSION})"
+            )
+        applied = 0
+        skipped = 0
+        for action_id, seq in (raw.get("hotkeys") or {}).items():
+            if action_id in DEFAULT_HOTKEYS:
+                self.set_hotkey(action_id, str(seq))
+                applied += 1
+            else:
+                skipped += 1
+        if "recent_files" in raw and isinstance(raw["recent_files"], list):
+            self._s.setValue("recent_files", [str(p) for p in raw["recent_files"]])
+        return {"applied": applied, "skipped": skipped}
