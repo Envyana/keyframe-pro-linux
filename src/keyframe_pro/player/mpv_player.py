@@ -86,6 +86,16 @@ class MpvPlayer(QWidget):
         self._scrub_audio_timer.timeout.connect(self._end_scrub_blip)
         self._scrub_blipping: bool = False
 
+        # Ping-pong: mpv has no native reverse-with-audio, so we drive
+        # backward playback ourselves with a frame-step QTimer. Audio is
+        # muted during the reverse phase.
+        self._pp_reversing: bool = False
+        self._pp_was_muted: bool = False
+        self._pp_in_frame: int = 0
+        self._pp_out_frame: int = 0
+        self._pp_timer = QTimer(self)
+        self._pp_timer.timeout.connect(self._pingpong_tick)
+
         # Property observers — these run on mpv's thread; marshal to Qt thread
         # via QTimer.singleShot(0, ...) when emitting signals that touch UI.
         self._mpv.observe_property("time-pos", self._on_time_pos)
@@ -116,6 +126,15 @@ class MpvPlayer(QWidget):
     def set_audio_track_file(self, audio_path: str) -> None:
         """Add an external audio file as a new track and select it."""
         self._set_audio_override(audio_path)
+
+    def load_image_sequence(self, mpv_url: str, fps: float = 24.0) -> None:
+        """Load an mf:// URL describing an image sequence."""
+        try:
+            self._mpv.set_property("mf-fps", float(fps))
+        except Exception:
+            pass
+        self._mpv.command("loadfile", mpv_url, "replace")
+        QTimer.singleShot(150, lambda: self.file_loaded.emit(mpv_url))
 
     def load_playlist(self, paths: list[str]) -> None:
         """Load multiple files as a playlist; mpv plays them back-to-back."""
@@ -173,15 +192,80 @@ class MpvPlayer(QWidget):
         self._mpv.audio_delay = float(seconds)
 
     def set_loop_mode(self, mode: str) -> None:
-        """'none' | 'loop' | 'pingpong'"""
+        """'none' | 'loop' | 'pingpong'
+
+        For 'pingpong' we disable mpv's own loop and instead trigger a
+        reverse phase via _start_reverse() when the playhead reaches the
+        out-frame (host signals this when in/out range is enforced).
+        """
         self._loop_mode = mode
         if mode == "loop":
             self._mpv.loop_file = "inf"
         else:
             self._mpv.loop_file = "no"
+        if mode != "pingpong":
+            self._stop_reverse()
 
     def loop_mode(self) -> str:
         return self._loop_mode
+
+    # ---------- ping-pong ----------
+
+    def set_pingpong_range(self, in_frame: int, out_frame: int) -> None:
+        self._pp_in_frame = max(0, int(in_frame))
+        self._pp_out_frame = max(self._pp_in_frame, int(out_frame))
+
+    def is_reversing(self) -> bool:
+        return self._pp_reversing
+
+    def trigger_pingpong_at_end(self) -> None:
+        """Call when the host detects the playhead has reached out_frame
+        and loop mode is pingpong. Starts the reverse phase."""
+        if self._loop_mode != "pingpong":
+            return
+        if self._pp_reversing:
+            return
+        self._start_reverse()
+
+    def _start_reverse(self) -> None:
+        self._pp_reversing = True
+        try:
+            self._pp_was_muted = bool(self._mpv.mute)
+            self._mpv.mute = True
+            self._mpv.pause = True
+        except Exception:
+            pass
+        # Step ~at-the-FPS rate; minimum 30 ms to avoid CPU spikes
+        period_ms = max(30, int(1000.0 / max(1.0, self._fps)))
+        self._pp_timer.start(period_ms)
+
+    def _stop_reverse(self) -> None:
+        if not self._pp_reversing:
+            return
+        self._pp_reversing = False
+        self._pp_timer.stop()
+        try:
+            self._mpv.mute = self._pp_was_muted
+        except Exception:
+            pass
+
+    def _pingpong_tick(self) -> None:
+        if not self._pp_reversing:
+            self._pp_timer.stop()
+            return
+        cur = self.current_frame()
+        if cur <= self._pp_in_frame:
+            # Reached the start of the range — flip back to forward play
+            self._stop_reverse()
+            try:
+                self._mpv.pause = False
+            except Exception:
+                pass
+            return
+        try:
+            self._mpv.command("frame-back-step")
+        except Exception:
+            pass
 
     # ---------- seek ----------
 
