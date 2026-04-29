@@ -1,0 +1,65 @@
+"""User settings + customizable hotkeys persisted via QSettings."""
+from __future__ import annotations
+
+from PySide6.QtCore import QSettings
+
+
+# Action ID → (default key sequence, human label)
+DEFAULT_HOTKEYS: dict[str, tuple[str, str]] = {
+    "play_toggle":      ("Space",          "Play / Pause"),
+    "step_back_1":      ("Left",           "Previous frame"),
+    "step_fwd_1":       ("Right",          "Next frame"),
+    "step_back_10":     ("Shift+Left",     "Back 10 frames"),
+    "step_fwd_10":      ("Shift+Right",    "Forward 10 frames"),
+    "goto_start":       ("Home",           "Go to start"),
+    "goto_end":         ("End",            "Go to end"),
+    "set_in":           ("I",              "Set In"),
+    "set_out":          ("O",              "Set Out"),
+    "clear_inout":      ("Shift+X",        "Clear In/Out"),
+    "add_bookmark":     ("B",              "Add bookmark"),
+    "add_range_bm":     ("Shift+B",        "Add range bookmark"),
+    "prev_bookmark":    ("[",              "Previous bookmark"),
+    "next_bookmark":    ("]",              "Next bookmark"),
+    "annotate_toggle":  ("A",              "Toggle annotate mode"),
+    "undo_stroke":      ("Ctrl+Z",         "Undo last stroke"),
+    "clear_all_ann":    ("Ctrl+Shift+Delete", "Clear all annotations"),
+    "mute_toggle":      ("M",              "Mute"),
+    "fullscreen":       ("F",              "Fullscreen"),
+    "always_on_top":    ("T",              "Always on top"),
+    "compare_a":        ("1",              "View A only"),
+    "compare_b":        ("2",              "View B only"),
+    "compare_wipe":     ("3",              "Wipe compare"),
+    "compare_split_v":  ("4",              "Split vertical"),
+    "compare_split_h":  ("5",              "Split horizontal"),
+}
+
+
+class Settings:
+    """Thin wrapper around QSettings for hotkeys + misc preferences."""
+
+    ORG = "KeyframeProLinux"
+    APP = "Keyframe Pro Linux"
+
+    def __init__(self) -> None:
+        self._s = QSettings(self.ORG, self.APP)
+
+    def hotkey(self, action_id: str) -> str:
+        default = DEFAULT_HOTKEYS.get(action_id, ("", ""))[0]
+        return str(self._s.value(f"hotkeys/{action_id}", default))
+
+    def set_hotkey(self, action_id: str, sequence: str) -> None:
+        self._s.setValue(f"hotkeys/{action_id}", sequence)
+
+    def reset_hotkeys(self) -> None:
+        self._s.remove("hotkeys")
+
+    def all_hotkeys(self) -> dict[str, str]:
+        return {a: self.hotkey(a) for a in DEFAULT_HOTKEYS}
+
+    # --- generic ---
+
+    def value(self, key: str, default=None):
+        return self._s.value(key, default)
+
+    def set_value(self, key: str, value) -> None:
+        self._s.setValue(key, value)
