@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import locale
+from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QObject, Qt, Signal, QTimer
+from PySide6.QtCore import QObject, Qt, Signal, QTimer, QPointF
+from PySide6.QtGui import QMouseEvent, QWheelEvent
 from PySide6.QtWidgets import QWidget
 
 import mpv
@@ -56,6 +58,23 @@ class MpvPlayer(QWidget):
         self._loop_mode: str = "loop"  # 'none' | 'loop' | 'pingpong'
         self._reverse: bool = False
         self._user_speed: float = 1.0
+
+        # Pan / zoom state (mpv: video-zoom is log2 scale, pan-x/y are 0..1)
+        self._zoom_log2: float = 0.0
+        self._pan_x: float = 0.0
+        self._pan_y: float = 0.0
+        self._panning: bool = False
+        self._pan_anchor: Optional[QPointF] = None
+        self._pan_start: tuple[float, float] = (0.0, 0.0)
+
+        # Audio scrub: when user scrubs while paused, briefly unpause to
+        # produce an audible "scratch" sample at the new position.
+        self._scrub_audio_enabled: bool = False
+        self._scrub_audio_blip_ms: int = 90
+        self._scrub_audio_timer = QTimer(self)
+        self._scrub_audio_timer.setSingleShot(True)
+        self._scrub_audio_timer.timeout.connect(self._end_scrub_blip)
+        self._scrub_blipping: bool = False
 
         # Property observers — these run on mpv's thread; marshal to Qt thread
         # via QTimer.singleShot(0, ...) when emitting signals that touch UI.
@@ -155,6 +174,11 @@ class MpvPlayer(QWidget):
             return
         self.seek_seconds(frame / self._fps, exact=True)
 
+    def scrub_to_frame(self, frame: int) -> None:
+        """Like seek_frame but also produces an audio blip if scrub-audio is on."""
+        self.seek_frame(frame)
+        self._maybe_audio_blip()
+
     def step_frame(self, n: int = 1) -> None:
         """Step n frames (negative = back)."""
         try:
@@ -164,6 +188,84 @@ class MpvPlayer(QWidget):
             elif n < 0:
                 for _ in range(-n):
                     self._mpv.command("frame-back-step")
+        except Exception:
+            pass
+
+    # ---------- pan / zoom ----------
+
+    def set_zoom(self, log2_factor: float) -> None:
+        """video-zoom in log2 (0=100%, 1=200%, -1=50%). Clamped to [-3, 3]."""
+        z = max(-3.0, min(3.0, float(log2_factor)))
+        self._zoom_log2 = z
+        try:
+            self._mpv.video_zoom = z
+        except Exception:
+            pass
+
+    def zoom(self) -> float:
+        return self._zoom_log2
+
+    def set_pan(self, pan_x: float, pan_y: float) -> None:
+        """video-pan-x/y in [-3, 3] (mpv accepts arbitrary; clamp for sanity)."""
+        self._pan_x = max(-3.0, min(3.0, float(pan_x)))
+        self._pan_y = max(-3.0, min(3.0, float(pan_y)))
+        try:
+            self._mpv.video_pan_x = self._pan_x
+            self._mpv.video_pan_y = self._pan_y
+        except Exception:
+            pass
+
+    def reset_view(self) -> None:
+        self.set_zoom(0.0)
+        self.set_pan(0.0, 0.0)
+
+    # ---------- screenshot ----------
+
+    def screenshot(self, path: str, include_overlays: bool = False) -> bool:
+        """Save the current frame to `path`. Returns True on success.
+
+        include_overlays=False writes the raw video frame.
+        include_overlays=True writes what's currently on screen (with OSD).
+        """
+        try:
+            target = "window" if include_overlays else "video"
+            self._mpv.command("screenshot-to-file", str(path), target)
+            return Path(path).exists()
+        except Exception:
+            return False
+
+    # ---------- scrub audio ----------
+
+    def set_scrub_audio(self, enabled: bool) -> None:
+        self._scrub_audio_enabled = bool(enabled)
+        if not enabled and self._scrub_blipping:
+            self._end_scrub_blip()
+
+    def scrub_audio_enabled(self) -> bool:
+        return self._scrub_audio_enabled
+
+    def _maybe_audio_blip(self) -> None:
+        """Briefly unpause to make audio audible at the new scrub position."""
+        if not self._scrub_audio_enabled:
+            return
+        try:
+            if not bool(self._mpv.pause):
+                return  # already playing — natural audio handles it
+        except Exception:
+            return
+        try:
+            self._mpv.pause = False
+            self._scrub_blipping = True
+            self._scrub_audio_timer.start(self._scrub_audio_blip_ms)
+        except Exception:
+            self._scrub_blipping = False
+
+    def _end_scrub_blip(self) -> None:
+        if not self._scrub_blipping:
+            return
+        self._scrub_blipping = False
+        try:
+            self._mpv.pause = True
         except Exception:
             pass
 
@@ -187,6 +289,56 @@ class MpvPlayer(QWidget):
         if self._fps <= 0 or self._duration <= 0:
             return 0
         return int(round(self._duration * self._fps))
+
+    # ---------- mouse: pan / zoom ----------
+
+    def wheelEvent(self, ev: QWheelEvent) -> None:
+        # Zoom step: 1/8 octave per wheel notch; ctrl = finer
+        delta = ev.angleDelta().y()
+        if delta == 0:
+            return
+        step = 1.0 / 8.0
+        if ev.modifiers() & Qt.ControlModifier:
+            step = 1.0 / 32.0
+        self.set_zoom(self._zoom_log2 + (step if delta > 0 else -step))
+        ev.accept()
+
+    def mousePressEvent(self, ev: QMouseEvent) -> None:
+        if ev.button() == Qt.MiddleButton:
+            self._panning = True
+            self._pan_anchor = ev.position()
+            self._pan_start = (self._pan_x, self._pan_y)
+            self.setCursor(Qt.ClosedHandCursor)
+            ev.accept()
+            return
+        super().mousePressEvent(ev)
+
+    def mouseMoveEvent(self, ev: QMouseEvent) -> None:
+        if self._panning and self._pan_anchor is not None:
+            w = max(self.width(), 1)
+            h = max(self.height(), 1)
+            dx = (ev.position().x() - self._pan_anchor.x()) / w
+            dy = (ev.position().y() - self._pan_anchor.y()) / h
+            self.set_pan(self._pan_start[0] + dx, self._pan_start[1] + dy)
+            ev.accept()
+            return
+        super().mouseMoveEvent(ev)
+
+    def mouseReleaseEvent(self, ev: QMouseEvent) -> None:
+        if ev.button() == Qt.MiddleButton and self._panning:
+            self._panning = False
+            self._pan_anchor = None
+            self.unsetCursor()
+            ev.accept()
+            return
+        super().mouseReleaseEvent(ev)
+
+    def mouseDoubleClickEvent(self, ev: QMouseEvent) -> None:
+        if ev.button() == Qt.LeftButton:
+            self.reset_view()
+            ev.accept()
+            return
+        super().mouseDoubleClickEvent(ev)
 
     # ---------- property callbacks (mpv thread → Qt thread) ----------
 
