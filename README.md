@@ -2,21 +2,25 @@
 
 Cross-platform animation reference player inspired by [Keyframe Pro 2](https://zurbrigg.com/keyframe-pro-2). Built with Python, PySide6 (Qt 6), and libmpv. Runs natively on Linux (Ubuntu, Fedora, Arch, openSUSE, Fedora Kinoite/Silverblue via toolbox), and works on macOS / Windows with the same code (libmpv + Qt are cross-platform).
 
-## Status (v0.3.0)
+## Status (v0.4.0)
 
-Iterations **1–9 + UX pass** complete:
+Iterations **1–9 + UX pass + medium pass** complete:
 
 **Playback** — frame-accurate seek, frame stepping, variable speed with audio time-stretch (0.10× → 4×), looping, in/out range, audio offset, volume, mute, RAM-cached playback via libmpv, always-on-top, fullscreen. **Pan & zoom** (mouse wheel zoom around cursor, middle-drag pan, double-click reset, +/− hotkeys). **Audio scrub** mode — brief audible blip while scrubbing the timeline.
 
-**Annotations** — pen, highlighter, arrow, rectangle, ellipse, eraser, laser pointer. Foreground / background layers. Per-frame storage (resolution-independent: normalized coords). Held frames. Ghosting (prev/next frame preview). Color picker + presets, adjustable width.
+**Annotations** — pen, highlighter, arrow, rectangle, ellipse, **text** (with QInputDialog input + drop-shadow rendering), eraser, laser pointer. Foreground / background layers. Per-frame storage (normalized coords). Held frames. Ghosting (prev/next frame preview). Color picker + presets, adjustable width.
 
-**Bookmarks** — frame & range bookmarks, cycle next/prev, dock panel, ticks on timeline.
+**Bookmarks** — frame, range, and **annotation-kind** bookmarks. Cycle next/prev, dock panel with **color dot icons**, **right-click context menu** (Go to / Edit / Delete), **bookmark editor dialog** (name, color picker, kind, in/out, note), **Sync Annotation Bookmarks** button to auto-generate bookmarks for every annotated frame.
 
-**Multi-source timeline** — add multiple sources, reorder via drag, **per-clip in/out + label + audio override editor dialog**, source dock panel, double-click to activate, single-click "Edit…" to open the editor.
+**HUD overlay** — toggleable on-viewer display of frame / time / fps. Selectable corner position (top-left, top-right, bottom-left, bottom-right).
+
+**Mouse scrubbing** — Shift + left-drag horizontally on the video to scrub. Ctrl modifier slows it 4× for fine adjustment.
+
+**Multi-source timeline** — add multiple sources, reorder via drag, **per-clip in/out + label + audio override editor dialog**. **Audio override** is wired into mpv (`audio-add … select`) so the chosen audio file replaces the source's own audio when the clip is loaded. Source dock panel, double-click to activate, "Edit…" to edit.
 
 **Files** — drag-and-drop video files into the window (single = load; multiple = add to timeline). **Recent files** menu (last 12, auto-pruned). **Save Screenshot** of current frame to `~/Pictures/keyframe-pro/`.
 
-**A/B compare + split** — second mpv instance for B-source, modes: A-only / B-only / wipe / split-V / split-H. Mouse-drag the wipe seam. Sync toggle keeps A and B at the same frame.
+**A/B/C/D compare** — up to 4 mpv instances. Modes: A-only, B-only, wipe (mouse-drag the seam), split-V, split-H, **grid 2×2** (4 sources), **flicker** (rapid A/B alternation, the classic animator's flip-compare). Adjustable flicker interval (40–2000 ms). Sync toggle.
 
 **Export** — ffmpeg-based export with codec choice (x264, x265, ProRes, VP9, GIF), CRF/preset, FPS, optional resize, with/without audio, live ffmpeg log + progress.
 
@@ -147,7 +151,10 @@ pip install -r requirements.txt
 | M | Mute |
 | F | Fullscreen |
 | T | Always on top |
-| 1–5 | Compare modes (A / B / Wipe / Split V / Split H) |
+| 1–7 | Compare modes (A / B / Wipe / Split V / Split H / Grid 2×2 / Flicker) |
+| H | Toggle HUD |
+| Ctrl+Shift+B | Sync annotation bookmarks |
+| Shift+Left-drag | Variable mouse scrub on video (Ctrl = fine) |
 | S | Save screenshot |
 | Shift+R | Reset pan/zoom |
 | + / − | Zoom in / out |

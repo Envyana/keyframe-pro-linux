@@ -31,11 +31,15 @@ DEFAULT_HOTKEYS: dict[str, tuple[str, str]] = {
     "compare_wipe":     ("3",              "Wipe compare"),
     "compare_split_v":  ("4",              "Split vertical"),
     "compare_split_h":  ("5",              "Split horizontal"),
+    "compare_grid":     ("6",              "Grid 2×2 compare"),
+    "compare_flicker":  ("7",              "Flicker compare"),
     "screenshot":       ("S",              "Save screenshot of current frame"),
     "reset_view":       ("Shift+R",        "Reset pan/zoom"),
     "scrub_audio_toggle": ("Shift+A",      "Toggle audio scrub"),
     "zoom_in":          ("+",              "Zoom in"),
     "zoom_out":         ("-",              "Zoom out"),
+    "hud_toggle":       ("H",              "Toggle frame/time HUD"),
+    "sync_ann_bm":      ("Ctrl+Shift+B",   "Sync annotation bookmarks"),
 }
 
 

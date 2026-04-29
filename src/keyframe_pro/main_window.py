@@ -21,6 +21,8 @@ from .widgets.compare_toolbar import CompareToolbar
 from .widgets.export_dialog import ExportDialog
 from .widgets.preferences import PreferencesDialog
 from .widgets.clip_editor import ClipEditor
+from .widgets.bookmark_editor import BookmarkEditor
+from .widgets.hud_overlay import HudOverlay
 from .core.bookmarks import BookmarkModel, Bookmark
 from .core.annotations import AnnotationModel
 from .core.project import Project, ProjectSource
@@ -48,22 +50,29 @@ class MainWindow(QMainWindow):
         self.timeline_model = Timeline()
         self.settings = Settings()
 
-        # ---------- players (A is primary, B is comparison) ----------
-        self.player = MpvPlayer()         # A
-        self.player_b = MpvPlayer()       # B (compare)
+        # ---------- players (A primary; B/C/D for compare) ----------
+        self.player = MpvPlayer()
+        self.player_b = MpvPlayer()
+        self.player_c = MpvPlayer()
+        self.player_d = MpvPlayer()
 
-        # Compare view hosts both players
-        self.compare_view = CompareView(self.player, self.player_b)
+        # Compare view hosts all 4 players
+        self.compare_view = CompareView(
+            self.player, self.player_b, self.player_c, self.player_d
+        )
 
-        # Annotation overlay sits on top of compare_view
+        # Annotation + HUD overlays sit on top of compare_view
         self.viewer_container = QWidget()
         viewer_stack = QStackedLayout(self.viewer_container)
         viewer_stack.setStackingMode(QStackedLayout.StackAll)
         viewer_stack.setContentsMargins(0, 0, 0, 0)
+        self.hud = HudOverlay(parent=self.viewer_container)
         self.overlay = AnnotationOverlay(self.annotations, parent=self.viewer_container)
+        viewer_stack.addWidget(self.hud)
         viewer_stack.addWidget(self.overlay)
         viewer_stack.addWidget(self.compare_view)
         self.overlay.raise_()
+        self.hud.raise_()
         self.compare_view.installEventFilter(self)
 
         # ---------- toolbars / panels ----------
@@ -118,9 +127,11 @@ class MainWindow(QMainWindow):
         # ---------- defaults ----------
         self.player.set_volume(80.0)
         self.player.set_loop_mode("loop")
-        self.player_b.set_volume(0.0)            # B muted by default
-        self.player_b.set_mute(True)
+        for p in (self.player_b, self.player_c, self.player_d):
+            p.set_volume(0.0)
+            p.set_mute(True)
         self._sync_b: bool = True
+        self._hud_visible: bool = False
 
         # ---------- API server ----------
         self.api = CommandServer()
@@ -187,6 +198,22 @@ class MainWindow(QMainWindow):
         a_full.triggered.connect(self._toggle_fullscreen)
         m_view.addAction(a_full)
 
+        a_hud = QAction("&HUD (frame/time)", self, checkable=True)
+        a_hud.toggled.connect(self._toggle_hud)
+        m_view.addAction(a_hud)
+        self._action_hud = a_hud
+
+        m_hud_pos = m_view.addMenu("HUD position")
+        for label, key in [
+            ("Top-Left", "top_left"),
+            ("Top-Right", "top_right"),
+            ("Bottom-Left", "bottom_left"),
+            ("Bottom-Right", "bottom_right"),
+        ]:
+            ap = QAction(label, self)
+            ap.triggered.connect(lambda _checked=False, k=key: self.hud.set_position(k))
+            m_hud_pos.addAction(ap)
+
         m_edit = self.menuBar().addMenu("&Edit")
         a_pref = QAction("&Preferences (Hotkeys)…", self)
         a_pref.triggered.connect(self._open_preferences)
@@ -241,6 +268,8 @@ class MainWindow(QMainWindow):
         )
         self.bookmark_panel.bookmark_activated.connect(self._goto_bookmark)
         self.bookmark_panel.delete_requested.connect(self.bookmarks.remove)
+        self.bookmark_panel.edit_requested.connect(self._edit_bookmark)
+        self.bookmark_panel.sync_annotations_requested.connect(self._sync_annotation_bookmarks)
 
         # annotation toolbar
         self.ann_toolbar.annotate_toggled.connect(self.overlay.set_active)
@@ -265,6 +294,15 @@ class MainWindow(QMainWindow):
         self.compare_view.wipe_changed.connect(self.compare_toolbar.set_wipe)
         self.compare_toolbar.sync_toggled.connect(self._set_sync_b)
         self.compare_toolbar.load_b_requested.connect(self._load_b)
+        self.compare_toolbar.load_c_requested.connect(self._load_c)
+        self.compare_toolbar.load_d_requested.connect(self._load_d)
+        self.compare_toolbar.flicker_interval_changed.connect(
+            self.compare_view.set_flicker_interval
+        )
+
+        # mouse-scrub from player A → main timeline syncs naturally via frame_changed,
+        # but we also want B to follow when sync is on
+        self.player.mouse_scrubbed.connect(self._on_mouse_scrub)
 
         # source panel
         self.source_panel.activate_requested.connect(self._activate_source)
@@ -302,11 +340,15 @@ class MainWindow(QMainWindow):
             "compare_wipe": lambda: self._set_compare_mode(CompareMode.WIPE),
             "compare_split_v": lambda: self._set_compare_mode(CompareMode.SPLIT_V),
             "compare_split_h": lambda: self._set_compare_mode(CompareMode.SPLIT_H),
+            "compare_grid": lambda: self._set_compare_mode(CompareMode.GRID_2X2),
+            "compare_flicker": lambda: self._set_compare_mode(CompareMode.FLICKER),
             "screenshot": self.save_screenshot,
             "reset_view": self.player.reset_view,
             "scrub_audio_toggle": self._toggle_scrub_audio,
             "zoom_in": lambda: self.player.set_zoom(self.player.zoom() + 0.125),
             "zoom_out": lambda: self.player.set_zoom(self.player.zoom() - 0.125),
+            "hud_toggle": self._toggle_hud,
+            "sync_ann_bm": self._sync_annotation_bookmarks,
         }
 
     def _apply_hotkeys(self) -> None:
@@ -374,7 +416,7 @@ class MainWindow(QMainWindow):
         # Switch primary source
         self._current_file = clip.media_path
         self.setWindowTitle(f"Keyframe Pro Linux — {Path(clip.media_path).name}")
-        self.player.load_file(clip.media_path)
+        self.player.load_file(clip.media_path, audio_override=clip.audio_override)
         if self._sync_b:
             self.player_b.load_file(clip.media_path)
 
@@ -387,8 +429,24 @@ class MainWindow(QMainWindow):
 
     def _load_b(self, path: str) -> None:
         self.player_b.load_file(path)
-        # Disable sync briefly so B can settle
         self.lbl_status.setText(f"B = {Path(path).name}")
+
+    def _load_c(self, path: str) -> None:
+        self.player_c.load_file(path)
+        self.lbl_status.setText(f"C = {Path(path).name}")
+
+    def _load_d(self, path: str) -> None:
+        self.player_d.load_file(path)
+        self.lbl_status.setText(f"D = {Path(path).name}")
+
+    def _on_mouse_scrub(self, frame: int) -> None:
+        if self._sync_b:
+            self.player_b.seek_frame(frame)
+            self.player_c.seek_frame(frame)
+            self.player_d.seek_frame(frame)
+        # Also reflect in the timeline widget
+        self.timeline_widget.set_current_frame(frame)
+        self.overlay.set_frame(frame)
 
     def _set_sync_b(self, on: bool) -> None:
         self._sync_b = on
@@ -541,8 +599,10 @@ class MainWindow(QMainWindow):
     def _on_frame(self, frame: int) -> None:
         self.timeline_widget.set_current_frame(frame)
         self.overlay.set_frame(frame)
-        if self._sync_b and abs(self.player_b.current_frame() - frame) > 1:
-            self.player_b.seek_frame(frame)
+        if self._sync_b:
+            for p in (self.player_b, self.player_c, self.player_d):
+                if abs(p.current_frame() - frame) > 1:
+                    p.seek_frame(frame)
 
         in_f = self.timeline_widget.in_frame()
         out_f = self.timeline_widget.out_frame()
@@ -553,6 +613,9 @@ class MainWindow(QMainWindow):
             else:
                 self.player.pause()
         fps = self.player.fps() or 24.0
+        # HUD update
+        self.hud.set_state(frame, self.player.total_frames(), fps,
+                           frame / fps if fps > 0 else 0.0)
         self.lbl_status.setText(
             f"Frame {frame:>5} / {max(0, self.player.total_frames()-1):>5}   "
             f"{frame/fps:6.2f}s   FPS {fps:.2f}"
@@ -595,6 +658,15 @@ class MainWindow(QMainWindow):
             self.showNormal()
         else:
             self.showFullScreen()
+
+    def _toggle_hud(self, on: bool | None = None) -> None:
+        if on is None:
+            on = not self._hud_visible
+            self._action_hud.setChecked(on)
+        self._hud_visible = bool(on)
+        self.hud.set_visible(self._hud_visible)
+        self.hud.setGeometry(self.compare_view.geometry())
+        self.hud.raise_()
 
     # =========================================================
     # API server handlers
@@ -779,6 +851,23 @@ class MainWindow(QMainWindow):
     # =========================================================
     # clip editor
     # =========================================================
+    def _edit_bookmark(self, index: int) -> None:
+        items = self.bookmarks.all()
+        if not (0 <= index < len(items)):
+            return
+        dlg = BookmarkEditor(items[index], self)
+        if dlg.exec():
+            self.bookmarks.update_at(index, dlg.result())
+
+    def _sync_annotation_bookmarks(self) -> None:
+        added = self.bookmarks.sync_from_annotations(
+            self.annotations.annotated_frames()
+        )
+        self.lbl_status.setText(
+            f"Synced annotation bookmarks (+{added})" if added > 0
+            else "Annotation bookmarks already in sync"
+        )
+
     def _edit_clip(self, index: int) -> None:
         clip = self.timeline_model.get(index)
         if clip is None:
@@ -786,9 +875,14 @@ class MainWindow(QMainWindow):
         dlg = ClipEditor(clip, self)
         if dlg.exec():
             new_clip = dlg.result_clip()
+            old_audio = clip.audio_override
             self.timeline_model.replace(index, new_clip)
-            # If the edited clip is the currently-loaded one, no need to reload —
-            # in/out is enforced at the timeline-mapping layer, not in mpv.
+            # If audio override changed and this clip is currently loaded, reload
+            # so the new audio track takes effect.
+            if (new_clip.audio_override != old_audio
+                    and self._current_file == new_clip.media_path):
+                self.player.load_file(new_clip.media_path,
+                                      audio_override=new_clip.audio_override)
             self.lbl_status.setText(f"Updated: {new_clip.label}")
 
     # =========================================================
@@ -797,13 +891,17 @@ class MainWindow(QMainWindow):
     def eventFilter(self, obj, ev):
         if obj is self.compare_view and ev.type() in (ev.Type.Resize, ev.Type.Show):
             self.overlay.setGeometry(self.compare_view.geometry())
+            self.hud.setGeometry(self.compare_view.geometry())
             self.overlay.raise_()
+            self.hud.raise_()
         return super().eventFilter(obj, ev)
 
     def resizeEvent(self, ev):
         super().resizeEvent(ev)
         self.overlay.setGeometry(self.compare_view.geometry())
+        self.hud.setGeometry(self.compare_view.geometry())
         self.overlay.raise_()
+        self.hud.raise_()
 
     def closeEvent(self, ev):
         try:
@@ -811,8 +909,8 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         try:
-            self.player.shutdown()
-            self.player_b.shutdown()
+            for p in (self.player, self.player_b, self.player_c, self.player_d):
+                p.shutdown()
         except Exception:
             pass
         super().closeEvent(ev)
