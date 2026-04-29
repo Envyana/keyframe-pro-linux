@@ -29,6 +29,8 @@ class TimelineWidget(QWidget):
         self._dragging: bool = False
         self._dragging_in: bool = False
         self._dragging_out: bool = False
+        # 'global' = show 0..total_frames; 'range' = show in..out only
+        self._view_mode: str = "global"
 
     # --- setters ---
 
@@ -68,18 +70,39 @@ class TimelineWidget(QWidget):
         self._annotated_frames = list(frames)
         self.update()
 
+    def set_view_mode(self, mode: str) -> None:
+        if mode in ("global", "range"):
+            self._view_mode = mode
+            self.update()
+
+    def view_mode(self) -> str:
+        return self._view_mode
+
     # --- helpers ---
 
+    def _domain(self) -> tuple[int, int]:
+        """Return the (lo, hi) frame range currently shown by the widget."""
+        if self._view_mode == "range":
+            lo = max(0, self._in_frame)
+            hi = max(lo + 1, self._out_frame)
+            return lo, hi
+        return 0, max(1, self._total_frames - 1)
+
     def _frame_to_x(self, frame: int) -> float:
-        if self._total_frames <= 1:
-            return 0.0
+        lo, hi = self._domain()
+        span = max(1, hi - lo)
         w = self.width()
-        return (frame / (self._total_frames - 1)) * w
+        return ((frame - lo) / span) * w
 
     def _x_to_frame(self, x: float) -> int:
         if self.width() <= 0:
             return 0
-        f = int(round((x / self.width()) * (self._total_frames - 1)))
+        lo, hi = self._domain()
+        span = max(1, hi - lo)
+        f = int(round((x / self.width()) * span + lo))
+        # In range mode, clamp to [lo, hi]; in global mode, [0, total-1]
+        if self._view_mode == "range":
+            return max(lo, min(f, hi))
         return max(0, min(f, self._total_frames - 1))
 
     # --- paint ---
