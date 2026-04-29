@@ -94,8 +94,15 @@ python3 -m venv .venv
 . .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
+# Install the package itself in editable mode so `python -m keyframe_pro`
+# resolves the package from src/.
+pip install -e .
 echo
 echo "Done. To run:"
 echo "  source .venv/bin/activate"
 echo "  python -m keyframe_pro            # GUI"
 echo "  python -m keyframe_pro file.mp4   # open a video on launch"
+echo
+echo "Or use the launcher (no manual venv activation needed):"
+echo "  ./run.sh"
+echo "  ./run.sh file.mp4"
