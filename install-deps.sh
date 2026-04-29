@@ -2,6 +2,22 @@
 # Detect distro and install system deps required by python-mpv (libmpv) and Qt.
 set -e
 
+# Don't run the whole script as root — only `apt install` etc. need sudo.
+# If run as root, the .venv would end up owned by root and pip wouldn't be
+# usable from the user account afterwards.
+if [ "$(id -u)" = "0" ]; then
+    cat >&2 <<'EOF'
+ERROR: Run this script as your normal user, NOT with sudo / as root.
+The script will call `sudo` itself only for the apt/dnf/etc. install step.
+Running the whole script as root makes the Python venv owned by root.
+
+Correct:    ./install-deps.sh
+Wrong:      sudo ./install-deps.sh
+            sudo sh ./install-deps.sh
+EOF
+    exit 1
+fi
+
 if [ -f /etc/os-release ]; then
     . /etc/os-release
     DISTRO="${ID:-unknown}"
@@ -14,9 +30,21 @@ fi
 echo "Detected distro: $DISTRO ($DISTRO_LIKE)"
 
 case "$DISTRO" in
-    ubuntu|debian|linuxmint|pop)
+    ubuntu|debian|linuxmint|pop|elementary|zorin|kali|raspbian)
         sudo apt update
-        sudo apt install -y python3 python3-venv python3-pip libmpv2 mpv ffmpeg \
+        # libmpv package name differs by version:
+        #   Ubuntu 22.04 (jammy) / Pop!_OS 22.04 / Debian bookworm → libmpv1
+        #   Ubuntu 24.04 (noble) / Debian trixie+               → libmpv2
+        if apt-cache show libmpv2 >/dev/null 2>&1; then
+            LIBMPV_PKG="libmpv2"
+        elif apt-cache show libmpv1 >/dev/null 2>&1; then
+            LIBMPV_PKG="libmpv1"
+        else
+            echo "Could not find libmpv1 or libmpv2 in apt. Add a backport or build libmpv from source."
+            exit 1
+        fi
+        echo "Using libmpv package: $LIBMPV_PKG"
+        sudo apt install -y python3 python3-venv python3-pip "$LIBMPV_PKG" mpv ffmpeg \
             libxkbcommon-x11-0 libxcb-cursor0 libegl1
         ;;
     fedora)
