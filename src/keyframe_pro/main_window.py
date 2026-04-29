@@ -28,11 +28,16 @@ from .core.annotations import AnnotationModel
 from .core.project import Project, ProjectSource
 from .core.timeline import Timeline, SourceClip
 from .core.settings import Settings, DEFAULT_HOTKEYS
+from .core.image_sequence import detect_sequence, is_image_file
 from .api.server import CommandServer
 
 VIDEO_FILTER = (
-    "Video files (*.mp4 *.mov *.mkv *.avi *.webm *.m4v *.mpg *.mpeg *.wmv "
-    "*.flv *.ogv *.gif);;Image sequences (*.png *.jpg *.jpeg *.exr *.tif *.tiff);;"
+    "Video / image sequence "
+    "(*.mp4 *.mov *.mkv *.avi *.webm *.m4v *.mpg *.mpeg *.wmv "
+    "*.flv *.ogv *.gif "
+    "*.png *.jpg *.jpeg *.exr *.tif *.tiff *.bmp *.webp *.tga);;"
+    "Video only (*.mp4 *.mov *.mkv *.avi *.webm *.m4v);;"
+    "Images only (*.png *.jpg *.jpeg *.exr *.tif *.tiff);;"
     "All files (*)"
 )
 
@@ -214,10 +219,19 @@ class MainWindow(QMainWindow):
             ap.triggered.connect(lambda _checked=False, k=key: self.hud.set_position(k))
             m_hud_pos.addAction(ap)
 
+        m_view.addSeparator()
+        a_tlv = QAction("Toggle Timeline View (Global ↔ Range)", self)
+        a_tlv.triggered.connect(self._toggle_timeline_view)
+        m_view.addAction(a_tlv)
+
         m_edit = self.menuBar().addMenu("&Edit")
         a_pref = QAction("&Preferences (Hotkeys)…", self)
         a_pref.triggered.connect(self._open_preferences)
         m_edit.addAction(a_pref)
+        m_edit.addSeparator()
+        a_clear_thumbs = QAction("Clear thumbnail cache", self)
+        a_clear_thumbs.triggered.connect(self._clear_thumbnail_cache)
+        m_edit.addAction(a_clear_thumbs)
 
         m_help = self.menuBar().addMenu("&Help")
         a_about = QAction("&About", self)
@@ -275,6 +289,7 @@ class MainWindow(QMainWindow):
         self.ann_toolbar.annotate_toggled.connect(self.overlay.set_active)
         self.ann_toolbar.tool_changed.connect(self.overlay.set_tool)
         self.ann_toolbar.color_changed.connect(self.overlay.set_color)
+        self.overlay.eyedropper_pick.connect(self._on_eyedropper)
         self.ann_toolbar.width_changed.connect(self.overlay.set_width)
         self.ann_toolbar.layer_changed.connect(self.overlay.set_layer)
         self.ann_toolbar.ghost_changed.connect(self.overlay.set_ghost)
@@ -349,6 +364,7 @@ class MainWindow(QMainWindow):
             "zoom_out": lambda: self.player.set_zoom(self.player.zoom() - 0.125),
             "hud_toggle": self._toggle_hud,
             "sync_ann_bm": self._sync_annotation_bookmarks,
+            "timeline_view": self._toggle_timeline_view,
         }
 
     def _apply_hotkeys(self) -> None:
@@ -372,6 +388,11 @@ class MainWindow(QMainWindow):
             self._apply_hotkeys()
             self.lbl_status.setText("Hotkeys updated")
 
+    def _clear_thumbnail_cache(self) -> None:
+        from .core import thumbnail
+        n = thumbnail.clear_cache()
+        self.lbl_status.setText(f"Cleared {n} thumbnail(s) from cache")
+
     # =========================================================
     # file ops
     # =========================================================
@@ -381,6 +402,32 @@ class MainWindow(QMainWindow):
             self.load_video(path)
 
     def load_video(self, path: str) -> None:
+        # If the path looks like an image, see if it's part of a sequence and
+        # load via mpv's mf:// protocol when so.
+        if is_image_file(path):
+            seq = detect_sequence(path)
+            if seq is not None:
+                mpv_url, count, start, fps = seq
+                self._current_file = path
+                self.setWindowTitle(
+                    f"Keyframe Pro Linux — {Path(path).name} (sequence × {count})"
+                )
+                self.player.load_image_sequence(mpv_url, fps=fps)
+                if self._sync_b and self.player_b is not None:
+                    self.player_b.load_image_sequence(mpv_url, fps=fps)
+                self.timeline_model.clear()
+                self.timeline_model.add(SourceClip(
+                    media_path=path,
+                    label=f"{Path(path).stem} (seq)",
+                    src_fps=fps,
+                    src_total_frames=count,
+                ))
+                self.settings.add_recent_file(path)
+                self._refresh_recent_menu()
+                self.lbl_status.setText(
+                    f"Loaded image sequence: {count} frames @ {fps} fps"
+                )
+                return
         self._current_file = path
         self.setWindowTitle(f"Keyframe Pro Linux — {Path(path).name}")
         self.player.load_file(path)
@@ -607,8 +654,14 @@ class MainWindow(QMainWindow):
         in_f = self.timeline_widget.in_frame()
         out_f = self.timeline_widget.out_frame()
         total = self.player.total_frames()
-        if total > 0 and out_f < total - 1 and frame > out_f:
-            if self.player.loop_mode() in ("loop", "pingpong"):
+        # Hand the in/out range to the player so its ping-pong knows
+        # where to bounce.
+        self.player.set_pingpong_range(in_f, out_f)
+        if total > 0 and frame >= out_f and out_f < total - 1:
+            mode = self.player.loop_mode()
+            if mode == "pingpong":
+                self.player.trigger_pingpong_at_end()
+            elif mode == "loop":
                 self.player.seek_frame(in_f)
             else:
                 self.player.pause()
@@ -658,6 +711,38 @@ class MainWindow(QMainWindow):
             self.showNormal()
         else:
             self.showFullScreen()
+
+    def _toggle_timeline_view(self) -> None:
+        new_mode = "range" if self.timeline_widget.view_mode() == "global" else "global"
+        self.timeline_widget.set_view_mode(new_mode)
+        self.lbl_status.setText(f"Timeline view: {new_mode}")
+
+    def _on_eyedropper(self, norm_pt) -> None:
+        # norm_pt is QPointF with 0..1 coords on the viewer.
+        if not self._current_file:
+            return
+        import tempfile
+        from PySide6.QtGui import QImage, QColor
+        tmp = Path(tempfile.gettempdir()) / "keyframe-pro-pick.png"
+        ok = self.player.screenshot(str(tmp))
+        if not ok:
+            self.lbl_status.setText("Eyedropper: screenshot failed")
+            return
+        img = QImage(str(tmp))
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        if img.isNull():
+            return
+        x = max(0, min(int(norm_pt.x() * img.width()), img.width() - 1))
+        y = max(0, min(int(norm_pt.y() * img.height()), img.height() - 1))
+        col: QColor = img.pixelColor(x, y)
+        hex_col = col.name()
+        # Apply to overlay + sync the toolbar's color button
+        self.overlay.set_color(hex_col)
+        self.ann_toolbar._set_color(hex_col)
+        self.lbl_status.setText(f"Picked color: {hex_col}")
 
     def _toggle_hud(self, on: bool | None = None) -> None:
         if on is None:
@@ -824,6 +909,8 @@ class MainWindow(QMainWindow):
     # =========================================================
     VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v",
                   ".mpg", ".mpeg", ".wmv", ".flv", ".ogv", ".gif"}
+    IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".exr",
+                  ".bmp", ".webp", ".tga"}
 
     def dragEnterEvent(self, ev) -> None:
         md = ev.mimeData()
@@ -838,7 +925,8 @@ class MainWindow(QMainWindow):
         for u in ev.mimeData().urls():
             if u.isLocalFile():
                 p = u.toLocalFile()
-                if Path(p).suffix.lower() in self.VIDEO_EXTS:
+                ext = Path(p).suffix.lower()
+                if ext in self.VIDEO_EXTS or ext in self.IMAGE_EXTS:
                     paths.append(p)
         if not paths:
             return

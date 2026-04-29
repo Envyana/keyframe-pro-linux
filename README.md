@@ -2,9 +2,9 @@
 
 Cross-platform animation reference player inspired by [Keyframe Pro 2](https://zurbrigg.com/keyframe-pro-2). Built with Python, PySide6 (Qt 6), and libmpv. Runs natively on Linux (Ubuntu, Fedora, Arch, openSUSE, Fedora Kinoite/Silverblue via toolbox), and works on macOS / Windows with the same code (libmpv + Qt are cross-platform).
 
-## Status (v0.4.0)
+## Status (v0.5.0)
 
-Iterations **1–9 + UX pass + medium pass** complete:
+Iterations **1–9 + UX pass + medium pass + low pass** complete:
 
 **Playback** — frame-accurate seek, frame stepping, variable speed with audio time-stretch (0.10× → 4×), looping, in/out range, audio offset, volume, mute, RAM-cached playback via libmpv, always-on-top, fullscreen. **Pan & zoom** (mouse wheel zoom around cursor, middle-drag pan, double-click reset, +/− hotkeys). **Audio scrub** mode — brief audible blip while scrubbing the timeline.
 
@@ -13,6 +13,18 @@ Iterations **1–9 + UX pass + medium pass** complete:
 **Bookmarks** — frame, range, and **annotation-kind** bookmarks. Cycle next/prev, dock panel with **color dot icons**, **right-click context menu** (Go to / Edit / Delete), **bookmark editor dialog** (name, color picker, kind, in/out, note), **Sync Annotation Bookmarks** button to auto-generate bookmarks for every annotated frame.
 
 **HUD overlay** — toggleable on-viewer display of frame / time / fps. Selectable corner position (top-left, top-right, bottom-left, bottom-right).
+
+**Image sequences** — drop or open one image of a numbered sequence (e.g. `render_0001.png`); auto-detects the rest of the run and loads via mpv's `mf://` protocol.
+
+**Eyedropper** — annotation tool that picks color from the current frame (sampled via mpv screenshot + QImage pixel read) and applies it to the active drawing color.
+
+**Source thumbnails** — ffmpeg-generated 160 px thumbnails for every clip in the Sources panel, cached in `~/.cache/keyframe-pro/thumbs/` keyed by path + mtime + width. Background QThread per generation. Edit menu has a "Clear thumbnail cache".
+
+**Real ping-pong loop** — when loop mode is set to ping-pong, reaching the out-frame triggers a QTimer-driven backward step (audio muted during reverse phase) until the playhead returns to the in-frame, then forward play resumes.
+
+**Global vs Range timeline view** — `\` toggles between showing the entire video (global) and zooming into the in/out region (range), so fine adjustments inside a short range fill the whole scrubber width.
+
+**Hotkey preset import / export** — Preferences dialog has Import / Export buttons. Preset is a single JSON file with `version`, `hotkeys`, optional `recent_files`. Preset version: 1.
 
 **Mouse scrubbing** — Shift + left-drag horizontally on the video to scrub. Ctrl modifier slows it 4× for fine adjustment.
 
@@ -155,6 +167,7 @@ pip install -r requirements.txt
 | H | Toggle HUD |
 | Ctrl+Shift+B | Sync annotation bookmarks |
 | Shift+Left-drag | Variable mouse scrub on video (Ctrl = fine) |
+| `\` | Toggle Global ↔ Range timeline view |
 | S | Save screenshot |
 | Shift+R | Reset pan/zoom |
 | + / − | Zoom in / out |
