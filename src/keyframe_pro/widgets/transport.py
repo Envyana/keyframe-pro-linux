@@ -17,6 +17,7 @@ class TransportBar(QWidget):
     audio_offset_changed = Signal(float)
     volume_changed = Signal(float)
     mute_toggled = Signal(bool)
+    scrub_audio_toggled = Signal(bool)
     set_in_requested = Signal()
     set_out_requested = Signal()
     clear_inout_requested = Signal()
@@ -104,6 +105,11 @@ class TransportBar(QWidget):
         self.btn_mute.setCheckable(True)
         self.btn_mute.toggled.connect(self._on_mute)
         layout.addWidget(self.btn_mute)
+
+        self.btn_scrub_audio = btn("Scrub♪", "Audio scrub: play brief audio while scrubbing (Shift+A)")
+        self.btn_scrub_audio.setCheckable(True)
+        self.btn_scrub_audio.toggled.connect(self.scrub_audio_toggled.emit)
+        layout.addWidget(self.btn_scrub_audio)
 
         # Wire button signals
         self.btn_play.clicked.connect(self.play_toggled.emit)

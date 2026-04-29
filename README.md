@@ -2,17 +2,19 @@
 
 Cross-platform animation reference player inspired by [Keyframe Pro 2](https://zurbrigg.com/keyframe-pro-2). Built with Python, PySide6 (Qt 6), and libmpv. Runs natively on Linux (Ubuntu, Fedora, Arch, openSUSE, Fedora Kinoite/Silverblue via toolbox), and works on macOS / Windows with the same code (libmpv + Qt are cross-platform).
 
-## Status (v0.2.0)
+## Status (v0.3.0)
 
-Iterations **1–9** complete:
+Iterations **1–9 + UX pass** complete:
 
-**Playback** — frame-accurate seek, frame stepping, variable speed with audio time-stretch (0.10× → 4×), looping, in/out range, audio offset, volume, mute, RAM-cached playback via libmpv, always-on-top, fullscreen.
+**Playback** — frame-accurate seek, frame stepping, variable speed with audio time-stretch (0.10× → 4×), looping, in/out range, audio offset, volume, mute, RAM-cached playback via libmpv, always-on-top, fullscreen. **Pan & zoom** (mouse wheel zoom around cursor, middle-drag pan, double-click reset, +/− hotkeys). **Audio scrub** mode — brief audible blip while scrubbing the timeline.
 
 **Annotations** — pen, highlighter, arrow, rectangle, ellipse, eraser, laser pointer. Foreground / background layers. Per-frame storage (resolution-independent: normalized coords). Held frames. Ghosting (prev/next frame preview). Color picker + presets, adjustable width.
 
 **Bookmarks** — frame & range bookmarks, cycle next/prev, dock panel, ticks on timeline.
 
-**Multi-source timeline** — add multiple sources, reorder via drag, per-clip in/out, source dock panel, double-click to activate.
+**Multi-source timeline** — add multiple sources, reorder via drag, **per-clip in/out + label + audio override editor dialog**, source dock panel, double-click to activate, single-click "Edit…" to open the editor.
+
+**Files** — drag-and-drop video files into the window (single = load; multiple = add to timeline). **Recent files** menu (last 12, auto-pruned). **Save Screenshot** of current frame to `~/Pictures/keyframe-pro/`.
 
 **A/B compare + split** — second mpv instance for B-source, modes: A-only / B-only / wipe / split-V / split-H. Mouse-drag the wipe seam. Sync toggle keeps A and B at the same frame.
 
@@ -140,10 +142,22 @@ pip install -r requirements.txt
 | Shift+B | Add range bookmark (uses In/Out) |
 | [ / ] | Previous / Next bookmark |
 | A | Toggle annotate mode |
+| Shift+A | Toggle audio scrub |
 | Ctrl+Z | Undo last stroke (current frame) |
 | M | Mute |
 | F | Fullscreen |
 | T | Always on top |
+| 1–5 | Compare modes (A / B / Wipe / Split V / Split H) |
+| S | Save screenshot |
+| Shift+R | Reset pan/zoom |
+| + / − | Zoom in / out |
+| Ctrl+S | File → Save Screenshot |
+| Ctrl+E | Export Timeline |
+| Wheel | Zoom (Ctrl+Wheel = finer) |
+| Middle-drag | Pan |
+| Double-click | Reset view |
+
+All hotkeys can be remapped via **Edit → Preferences (Hotkeys)**.
 
 ## Architecture
 

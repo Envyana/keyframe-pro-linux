@@ -20,6 +20,7 @@ from .widgets.compare_view import CompareView, CompareMode
 from .widgets.compare_toolbar import CompareToolbar
 from .widgets.export_dialog import ExportDialog
 from .widgets.preferences import PreferencesDialog
+from .widgets.clip_editor import ClipEditor
 from .core.bookmarks import BookmarkModel, Bookmark
 from .core.annotations import AnnotationModel
 from .core.project import Project, ProjectSource
@@ -39,6 +40,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Keyframe Pro Linux")
         self.resize(1320, 820)
+        self.setAcceptDrops(True)
 
         # ---------- models ----------
         self.bookmarks = BookmarkModel()
@@ -136,26 +138,46 @@ class MainWindow(QMainWindow):
     # =========================================================
     def _build_menu(self) -> None:
         m_file = self.menuBar().addMenu("&File")
-        for label, slot, sc in [
-            ("&Open Video...", self.open_file, QKeySequence.Open),
-            ("&Add Source to Timeline...", self.add_source, QKeySequence("Ctrl+Shift+O")),
-            (None, None, None),
-            ("Open &Project...", self.open_project, None),
-            ("&Save Project", self.save_project, QKeySequence.Save),
-            ("Save Project &As...", self.save_project_as, QKeySequence("Ctrl+Shift+S")),
-            (None, None, None),
-            ("&Export Timeline…", self.export_timeline, QKeySequence("Ctrl+E")),
-            (None, None, None),
-            ("&Quit", self.close, QKeySequence.Quit),
-        ]:
-            if label is None:
-                m_file.addSeparator()
-                continue
-            a = QAction(label, self)
-            if sc is not None:
-                a.setShortcut(sc)
-            a.triggered.connect(slot)
-            m_file.addAction(a)
+
+        a_open = QAction("&Open Video...", self, shortcut=QKeySequence.Open)
+        a_open.triggered.connect(self.open_file)
+        m_file.addAction(a_open)
+
+        a_add = QAction("&Add Source to Timeline...", self,
+                        shortcut=QKeySequence("Ctrl+Shift+O"))
+        a_add.triggered.connect(self.add_source)
+        m_file.addAction(a_add)
+
+        # Recent files submenu
+        self.menu_recent = m_file.addMenu("Open &Recent")
+        self._refresh_recent_menu()
+
+        m_file.addSeparator()
+        a_proj_open = QAction("Open &Project...", self)
+        a_proj_open.triggered.connect(self.open_project)
+        m_file.addAction(a_proj_open)
+        a_proj_save = QAction("&Save Project", self, shortcut=QKeySequence.Save)
+        a_proj_save.triggered.connect(self.save_project)
+        m_file.addAction(a_proj_save)
+        a_proj_save_as = QAction("Save Project &As...", self,
+                                 shortcut=QKeySequence("Ctrl+Shift+S"))
+        a_proj_save_as.triggered.connect(self.save_project_as)
+        m_file.addAction(a_proj_save_as)
+
+        m_file.addSeparator()
+        a_screenshot = QAction("Save Screenshot...", self,
+                               shortcut=QKeySequence("Ctrl+S"))
+        a_screenshot.triggered.connect(self.save_screenshot)
+        m_file.addAction(a_screenshot)
+        a_export = QAction("&Export Timeline…", self,
+                           shortcut=QKeySequence("Ctrl+E"))
+        a_export.triggered.connect(self.export_timeline)
+        m_file.addAction(a_export)
+
+        m_file.addSeparator()
+        a_quit = QAction("&Quit", self, shortcut=QKeySequence.Quit)
+        a_quit.triggered.connect(self.close)
+        m_file.addAction(a_quit)
 
         m_view = self.menuBar().addMenu("&View")
         a_top = QAction("Always on &Top", self, checkable=True)
@@ -203,6 +225,7 @@ class MainWindow(QMainWindow):
         self.transport.audio_offset_changed.connect(self.player.set_audio_offset)
         self.transport.volume_changed.connect(self.player.set_volume)
         self.transport.mute_toggled.connect(self.player.set_mute)
+        self.transport.scrub_audio_toggled.connect(self.player.set_scrub_audio)
         self.transport.set_in_requested.connect(self._set_in)
         self.transport.set_out_requested.connect(self._set_out)
         self.transport.clear_inout_requested.connect(self._clear_inout)
@@ -246,6 +269,7 @@ class MainWindow(QMainWindow):
         # source panel
         self.source_panel.activate_requested.connect(self._activate_source)
         self.source_panel.add_files_requested.connect(self._add_sources)
+        self.source_panel.edit_requested.connect(self._edit_clip)
         self.timeline_model.changed.connect(self._on_timeline_changed)
 
     # =========================================================
@@ -278,6 +302,11 @@ class MainWindow(QMainWindow):
             "compare_wipe": lambda: self._set_compare_mode(CompareMode.WIPE),
             "compare_split_v": lambda: self._set_compare_mode(CompareMode.SPLIT_V),
             "compare_split_h": lambda: self._set_compare_mode(CompareMode.SPLIT_H),
+            "screenshot": self.save_screenshot,
+            "reset_view": self.player.reset_view,
+            "scrub_audio_toggle": self._toggle_scrub_audio,
+            "zoom_in": lambda: self.player.set_zoom(self.player.zoom() + 0.125),
+            "zoom_out": lambda: self.player.set_zoom(self.player.zoom() - 0.125),
         }
 
     def _apply_hotkeys(self) -> None:
@@ -318,6 +347,8 @@ class MainWindow(QMainWindow):
         # Reset timeline to a single-clip representation
         self.timeline_model.clear()
         self.timeline_model.add(SourceClip(media_path=path, label=Path(path).name))
+        self.settings.add_recent_file(path)
+        self._refresh_recent_menu()
         self.lbl_status.setText(f"Loaded: {Path(path).name}")
 
     def add_source(self) -> None:
@@ -496,7 +527,8 @@ class MainWindow(QMainWindow):
         self.annotations.set_held(self.player.current_frame(), int(n))
 
     def _on_seek_frame(self, frame: int) -> None:
-        self.player.seek_frame(frame)
+        # Use scrub variant — produces an audio blip when scrub-audio is on.
+        self.player.scrub_to_frame(frame)
         if self._sync_b:
             self.player_b.seek_frame(frame)
 
@@ -652,6 +684,112 @@ class MainWindow(QMainWindow):
             ("info", h_info),
         ]:
             self.api.register(cmd, h)
+
+    # =========================================================
+    # recent files
+    # =========================================================
+    def _refresh_recent_menu(self) -> None:
+        if not hasattr(self, "menu_recent"):
+            return
+        self.menu_recent.clear()
+        items = self.settings.recent_files()
+        if not items:
+            empty = QAction("(empty)", self)
+            empty.setEnabled(False)
+            self.menu_recent.addAction(empty)
+            return
+        for p in items:
+            name = Path(p).name
+            a = QAction(f"{name}    [{p}]", self)
+            a.triggered.connect(lambda _checked=False, path=p: self._open_recent(path))
+            self.menu_recent.addAction(a)
+        self.menu_recent.addSeparator()
+        a_clear = QAction("Clear Recent", self)
+        a_clear.triggered.connect(lambda: (self.settings.clear_recent_files(),
+                                           self._refresh_recent_menu()))
+        self.menu_recent.addAction(a_clear)
+
+    def _open_recent(self, path: str) -> None:
+        if not Path(path).exists():
+            QMessageBox.warning(self, "File missing",
+                                f"File no longer exists:\n{path}")
+            return
+        self.load_video(path)
+
+    # =========================================================
+    # screenshot
+    # =========================================================
+    def save_screenshot(self) -> None:
+        if not self._current_file:
+            self.lbl_status.setText("No video loaded")
+            return
+        from datetime import datetime
+        out_dir = Path.home() / "Pictures" / "keyframe-pro"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        stem = Path(self._current_file).stem
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        f = self.player.current_frame()
+        path = out_dir / f"{stem}_f{f:06d}_{ts}.png"
+        ok = self.player.screenshot(str(path))
+        if ok:
+            self.lbl_status.setText(f"Saved: {path}")
+        else:
+            QMessageBox.warning(self, "Screenshot failed",
+                                "mpv could not write the screenshot.")
+
+    # =========================================================
+    # scrub audio
+    # =========================================================
+    def _toggle_scrub_audio(self) -> None:
+        # Toggle the button so its state stays in sync with the player.
+        self.transport.btn_scrub_audio.toggle()
+        self.lbl_status.setText(
+            f"Scrub audio: {'ON' if self.transport.btn_scrub_audio.isChecked() else 'OFF'}"
+        )
+
+    # =========================================================
+    # drag and drop
+    # =========================================================
+    VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v",
+                  ".mpg", ".mpeg", ".wmv", ".flv", ".ogv", ".gif"}
+
+    def dragEnterEvent(self, ev) -> None:
+        md = ev.mimeData()
+        if md.hasUrls() and any(u.isLocalFile() for u in md.urls()):
+            ev.acceptProposedAction()
+
+    def dragMoveEvent(self, ev) -> None:
+        ev.acceptProposedAction()
+
+    def dropEvent(self, ev) -> None:
+        paths = []
+        for u in ev.mimeData().urls():
+            if u.isLocalFile():
+                p = u.toLocalFile()
+                if Path(p).suffix.lower() in self.VIDEO_EXTS:
+                    paths.append(p)
+        if not paths:
+            return
+        if len(paths) == 1:
+            self.load_video(paths[0])
+        else:
+            self._add_sources(paths)
+        ev.acceptProposedAction()
+
+    # =========================================================
+    # clip editor
+    # =========================================================
+    def _edit_clip(self, index: int) -> None:
+        clip = self.timeline_model.get(index)
+        if clip is None:
+            return
+        dlg = ClipEditor(clip, self)
+        if dlg.exec():
+            new_clip = dlg.result_clip()
+            self.timeline_model.replace(index, new_clip)
+            # If the edited clip is the currently-loaded one, no need to reload —
+            # in/out is enforced at the timeline-mapping layer, not in mpv.
+            self.lbl_status.setText(f"Updated: {new_clip.label}")
 
     # =========================================================
     # overlay sizing / cleanup
