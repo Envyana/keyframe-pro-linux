@@ -15,6 +15,7 @@ class SourcePanel(QWidget):
 
     activate_requested = Signal(int)  # clip index → seek to its start
     add_files_requested = Signal(list)  # list[str]
+    edit_requested = Signal(int)       # open ClipEditor for this clip
 
     def __init__(self, timeline: Timeline) -> None:
         super().__init__()
@@ -27,19 +28,22 @@ class SourcePanel(QWidget):
         self.list = QListWidget()
         self.list.setSelectionMode(QAbstractItemView.SingleSelection)
         self.list.setDragDropMode(QAbstractItemView.InternalMove)
-        self.list.itemDoubleClicked.connect(self._on_activate)
+        self.list.itemDoubleClicked.connect(self._on_double_click)
         self.list.model().rowsMoved.connect(self._on_rows_moved)
         layout.addWidget(self.list, 1)
 
         row = QHBoxLayout()
         self.btn_add = QPushButton("Add…")
+        self.btn_edit = QPushButton("Edit…")
         self.btn_remove = QPushButton("Remove")
         self.btn_up = QPushButton("↑")
         self.btn_down = QPushButton("↓")
         self.btn_clear = QPushButton("Clear")
-        for b in (self.btn_add, self.btn_remove, self.btn_up, self.btn_down, self.btn_clear):
+        for b in (self.btn_add, self.btn_edit, self.btn_remove,
+                  self.btn_up, self.btn_down, self.btn_clear):
             b.setFixedHeight(26)
         row.addWidget(self.btn_add)
+        row.addWidget(self.btn_edit)
         row.addWidget(self.btn_remove)
         row.addWidget(self.btn_up)
         row.addWidget(self.btn_down)
@@ -47,6 +51,7 @@ class SourcePanel(QWidget):
         layout.addLayout(row)
 
         self.btn_add.clicked.connect(self._on_add)
+        self.btn_edit.clicked.connect(self._on_edit)
         self.btn_remove.clicked.connect(self._on_remove)
         self.btn_up.clicked.connect(lambda: self._move(-1))
         self.btn_down.clicked.connect(lambda: self._move(1))
@@ -68,9 +73,16 @@ class SourcePanel(QWidget):
             self.list.addItem(it)
         self.list.blockSignals(False)
 
-    def _on_activate(self, item: QListWidgetItem) -> None:
+    def _on_double_click(self, item: QListWidgetItem) -> None:
+        # Double-click activates (loads) the source. Edit is via the button.
         idx = int(item.data(Qt.UserRole))
         self.activate_requested.emit(idx)
+
+    def _on_edit(self) -> None:
+        it = self.list.currentItem()
+        if it is None:
+            return
+        self.edit_requested.emit(int(it.data(Qt.UserRole)))
 
     def _on_add(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
