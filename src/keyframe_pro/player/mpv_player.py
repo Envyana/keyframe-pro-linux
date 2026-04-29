@@ -24,6 +24,7 @@ class MpvPlayer(QWidget):
     file_loaded = Signal(str)
     play_state_changed = Signal(bool)       # True = playing
     eof_reached = Signal()
+    mouse_scrubbed = Signal(int)            # new frame from drag-scrub
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -67,6 +68,15 @@ class MpvPlayer(QWidget):
         self._pan_anchor: Optional[QPointF] = None
         self._pan_start: tuple[float, float] = (0.0, 0.0)
 
+        # Variable mouse scrub (Shift + left-drag horizontally)
+        self._mouse_scrub_enabled: bool = True
+        self._mouse_scrub_active: bool = False
+        self._mouse_scrub_anchor_x: float = 0.0
+        self._mouse_scrub_start_frame: int = 0
+        self._mouse_scrub_pixels_per_frame: float = 4.0
+        # Emitted with the new frame index when the user drag-scrubs.
+        # Wired by the host so the timeline + B player can update.
+
         # Audio scrub: when user scrubs while paused, briefly unpause to
         # produce an audible "scratch" sample at the new position.
         self._scrub_audio_enabled: bool = False
@@ -87,11 +97,25 @@ class MpvPlayer(QWidget):
 
     # ---------- file ops ----------
 
-    def load_file(self, path: str) -> None:
+    def load_file(self, path: str, audio_override: Optional[str] = None) -> None:
         self._mpv.command("loadfile", path, "replace")
         # Wait briefly then emit signal — the file-loaded event is async,
         # but consumers usually want to know immediately for UI seeding.
         QTimer.singleShot(150, lambda: self.file_loaded.emit(path))
+        if audio_override:
+            # mpv needs the file loaded first before we can add an external
+            # audio track; defer slightly.
+            QTimer.singleShot(250, lambda p=audio_override: self._set_audio_override(p))
+
+    def _set_audio_override(self, audio_path: str) -> None:
+        try:
+            self._mpv.command("audio-add", audio_path, "select")
+        except Exception:
+            pass
+
+    def set_audio_track_file(self, audio_path: str) -> None:
+        """Add an external audio file as a new track and select it."""
+        self._set_audio_override(audio_path)
 
     def load_playlist(self, paths: list[str]) -> None:
         """Load multiple files as a playlist; mpv plays them back-to-back."""
@@ -311,6 +335,16 @@ class MpvPlayer(QWidget):
             self.setCursor(Qt.ClosedHandCursor)
             ev.accept()
             return
+        # Shift+Left-drag: variable scrubbing
+        if (ev.button() == Qt.LeftButton
+                and self._mouse_scrub_enabled
+                and (ev.modifiers() & Qt.ShiftModifier)):
+            self._mouse_scrub_active = True
+            self._mouse_scrub_anchor_x = ev.position().x()
+            self._mouse_scrub_start_frame = self.current_frame()
+            self.setCursor(Qt.SizeHorCursor)
+            ev.accept()
+            return
         super().mousePressEvent(ev)
 
     def mouseMoveEvent(self, ev: QMouseEvent) -> None:
@@ -322,12 +356,29 @@ class MpvPlayer(QWidget):
             self.set_pan(self._pan_start[0] + dx, self._pan_start[1] + dy)
             ev.accept()
             return
+        if self._mouse_scrub_active:
+            dx = ev.position().x() - self._mouse_scrub_anchor_x
+            # Slow-down with Ctrl for fine scrubbing
+            ppf = (self._mouse_scrub_pixels_per_frame * 4
+                   if (ev.modifiers() & Qt.ControlModifier)
+                   else self._mouse_scrub_pixels_per_frame)
+            new_frame = int(round(self._mouse_scrub_start_frame + dx / ppf))
+            new_frame = max(0, min(new_frame, max(0, self.total_frames() - 1)))
+            self.scrub_to_frame(new_frame)
+            self.mouse_scrubbed.emit(new_frame)
+            ev.accept()
+            return
         super().mouseMoveEvent(ev)
 
     def mouseReleaseEvent(self, ev: QMouseEvent) -> None:
         if ev.button() == Qt.MiddleButton and self._panning:
             self._panning = False
             self._pan_anchor = None
+            self.unsetCursor()
+            ev.accept()
+            return
+        if ev.button() == Qt.LeftButton and self._mouse_scrub_active:
+            self._mouse_scrub_active = False
             self.unsetCursor()
             ev.accept()
             return
