@@ -74,6 +74,21 @@ class MpvPlayer(QWidget):
         # but consumers usually want to know immediately for UI seeding.
         QTimer.singleShot(150, lambda: self.file_loaded.emit(path))
 
+    def load_playlist(self, paths: list[str]) -> None:
+        """Load multiple files as a playlist; mpv plays them back-to-back."""
+        if not paths:
+            return
+        self._mpv.command("loadfile", paths[0], "replace")
+        for p in paths[1:]:
+            self._mpv.command("loadfile", p, "append")
+        QTimer.singleShot(150, lambda p=paths[0]: self.file_loaded.emit(p))
+
+    def playlist_index(self, index: int) -> None:
+        try:
+            self._mpv.playlist_pos = int(index)
+        except Exception:
+            pass
+
     def stop(self) -> None:
         self._mpv.command("stop")
 
