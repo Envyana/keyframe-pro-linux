@@ -18,6 +18,7 @@ class AnnotationOverlay(QWidget):
     """
 
     laser_moved = Signal(QPointF)
+    eyedropper_pick = Signal(QPointF)   # emitted with normalized 0..1 coords
 
     TOOL_PEN = "pen"
     TOOL_HIGHLIGHTER = "highlighter"
@@ -27,6 +28,7 @@ class AnnotationOverlay(QWidget):
     TOOL_ERASER = "eraser"
     TOOL_LASER = "laser"
     TOOL_TEXT = "text"
+    TOOL_EYEDROPPER = "eyedropper"
 
     def __init__(self, model: AnnotationModel, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -117,6 +119,10 @@ class AnnotationOverlay(QWidget):
             return
         if self._tool == self.TOOL_TEXT and ev.button() == Qt.LeftButton:
             self._add_text_at(ev.position())
+            return
+        if self._tool == self.TOOL_EYEDROPPER and ev.button() == Qt.LeftButton:
+            norm = self._to_norm(ev.position())
+            self.eyedropper_pick.emit(QPointF(norm[0], norm[1]))
             return
         if ev.button() == Qt.LeftButton:
             self._drawing = True

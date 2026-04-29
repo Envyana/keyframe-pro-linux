@@ -44,6 +44,7 @@ class AnnotationToolbar(QWidget):
             ("▭", AnnotationOverlay.TOOL_RECT),
             ("◯", AnnotationOverlay.TOOL_ELLIPSE),
             ("Text", AnnotationOverlay.TOOL_TEXT),
+            ("Pick", AnnotationOverlay.TOOL_EYEDROPPER),
             ("Erase", AnnotationOverlay.TOOL_ERASER),
             ("Laser", AnnotationOverlay.TOOL_LASER),
         ]:
