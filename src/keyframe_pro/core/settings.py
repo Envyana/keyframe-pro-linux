@@ -31,6 +31,11 @@ DEFAULT_HOTKEYS: dict[str, tuple[str, str]] = {
     "compare_wipe":     ("3",              "Wipe compare"),
     "compare_split_v":  ("4",              "Split vertical"),
     "compare_split_h":  ("5",              "Split horizontal"),
+    "screenshot":       ("S",              "Save screenshot of current frame"),
+    "reset_view":       ("Shift+R",        "Reset pan/zoom"),
+    "scrub_audio_toggle": ("Shift+A",      "Toggle audio scrub"),
+    "zoom_in":          ("+",              "Zoom in"),
+    "zoom_out":         ("-",              "Zoom out"),
 }
 
 
@@ -55,6 +60,27 @@ class Settings:
 
     def all_hotkeys(self) -> dict[str, str]:
         return {a: self.hotkey(a) for a in DEFAULT_HOTKEYS}
+
+    # --- recent files ---
+
+    MAX_RECENT = 12
+
+    def recent_files(self) -> list[str]:
+        raw = self._s.value("recent_files", []) or []
+        # QSettings can return a string for a 1-element list; normalize.
+        if isinstance(raw, str):
+            raw = [raw]
+        return [str(p) for p in raw if p]
+
+    def add_recent_file(self, path: str) -> None:
+        path = str(path)
+        items = [p for p in self.recent_files() if p != path]
+        items.insert(0, path)
+        items = items[: self.MAX_RECENT]
+        self._s.setValue("recent_files", items)
+
+    def clear_recent_files(self) -> None:
+        self._s.setValue("recent_files", [])
 
     # --- generic ---
 
