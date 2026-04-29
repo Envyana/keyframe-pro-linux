@@ -2,19 +2,29 @@
 
 Cross-platform animation reference player inspired by [Keyframe Pro 2](https://zurbrigg.com/keyframe-pro-2). Built with Python, PySide6 (Qt 6), and libmpv. Runs natively on Linux (Ubuntu, Fedora, Arch, openSUSE, Fedora Kinoite/Silverblue via toolbox), and works on macOS / Windows with the same code (libmpv + Qt are cross-platform).
 
-## Status (v0.1.0)
+## Status (v0.2.0)
 
-This is iteration **1 + 2 + 3** of a multi-iteration build. Implemented:
+Iterations **1–9** complete:
 
-**Playback** — frame-accurate seek, frame stepping (`◀ ▶|`), variable speed with audio time-stretch (0.10× → 4×), looping, in/out range, audio offset, volume, mute, RAM-cached playback via libmpv, always-on-top, fullscreen.
+**Playback** — frame-accurate seek, frame stepping, variable speed with audio time-stretch (0.10× → 4×), looping, in/out range, audio offset, volume, mute, RAM-cached playback via libmpv, always-on-top, fullscreen.
 
-**Annotations** — pen, highlighter, arrow, rectangle, ellipse, eraser (last stroke), laser pointer. Foreground / background layers. Per-frame storage (resolution-independent: normalized coords). Held frames (annotation persists across N frames). Ghosting (preview annotations from prev/next frame). Color picker + presets, adjustable width.
+**Annotations** — pen, highlighter, arrow, rectangle, ellipse, eraser, laser pointer. Foreground / background layers. Per-frame storage (resolution-independent: normalized coords). Held frames. Ghosting (prev/next frame preview). Color picker + presets, adjustable width.
 
-**Bookmarks** — frame bookmarks, range bookmarks (uses current in/out), cycle next/prev, dock panel listing all bookmarks with seek-on-double-click. Annotated frames appear as ticks on the timeline.
+**Bookmarks** — frame & range bookmarks, cycle next/prev, dock panel, ticks on timeline.
+
+**Multi-source timeline** — add multiple sources, reorder via drag, per-clip in/out, source dock panel, double-click to activate.
+
+**A/B compare + split** — second mpv instance for B-source, modes: A-only / B-only / wipe / split-V / split-H. Mouse-drag the wipe seam. Sync toggle keeps A and B at the same frame.
+
+**Export** — ffmpeg-based export with codec choice (x264, x265, ProRes, VP9, GIF), CRF/preset, FPS, optional resize, with/without audio, live ffmpeg log + progress.
+
+**Python client API** — TCP JSON server on 127.0.0.1:18765. Commands: `ping`, `set_frame`, `get_frame`, `load_file`, `play`, `pause`, `set_fps`, `add_bookmark`, `info`. Includes `KproClient` and example Maya/Blender sync scripts.
+
+**Hotkey customization** — Preferences dialog to remap any shortcut, conflict detection, reset-to-defaults. Persists via QSettings.
+
+**Native Wayland** — experimental `RenderMpvPlayer` using libmpv render API + QOpenGLWidget for native Wayland embedding (default `MpvPlayer` uses wid embedding which works on X11 / XWayland).
 
 **Project** — save/load `.kproj` (JSON) with sources, bookmarks, annotations, fps, speed, loop mode.
-
-Planned for next iterations: timeline (multi-source), A/B compare + split viewers, timeline export via ffmpeg, Python client API (Maya/Blender/Houdini sync), customizable hotkeys.
 
 ## Installation
 
@@ -139,30 +149,64 @@ pip install -r requirements.txt
 
 ```
 src/keyframe_pro/
-├── __main__.py           # CLI entry
-├── app.py                # QApplication + dark theme
-├── main_window.py        # Wires everything
+├── __main__.py             # CLI entry
+├── app.py                  # QApplication + dark theme
+├── main_window.py          # Wires everything
 ├── player/
-│   └── mpv_player.py     # libmpv embedded in QWidget
+│   ├── mpv_player.py       # libmpv embedded via wid (X11/XWayland)
+│   └── wayland_player.py   # libmpv render API (native Wayland)
 ├── widgets/
-│   ├── timeline.py           # Custom scrubber w/ bookmark+annotation marks
-│   ├── transport.py          # Play/step/speed/loop/audio controls
-│   ├── annotation.py         # Drawing overlay (transparent)
-│   ├── annotation_toolbar.py # Tool/color/width pickers
-│   └── bookmark_panel.py     # Bookmark list dock
-└── core/
-    ├── bookmarks.py      # BookmarkModel
-    ├── annotations.py    # AnnotationModel (per-frame strokes)
-    └── project.py        # Save/load .kproj
+│   ├── timeline.py             # Scrubber w/ bookmark+annotation ticks
+│   ├── transport.py            # Play/step/speed/loop/audio controls
+│   ├── annotation.py           # Drawing overlay
+│   ├── annotation_toolbar.py   # Tool/color/width pickers
+│   ├── bookmark_panel.py       # Bookmark list dock
+│   ├── source_panel.py         # Multi-source list dock
+│   ├── compare_view.py         # A/B layout (single/wipe/split)
+│   ├── compare_toolbar.py      # Compare mode controls
+│   ├── export_dialog.py        # ffmpeg export UI + worker
+│   └── preferences.py          # Hotkey editor
+├── core/
+│   ├── bookmarks.py        # BookmarkModel
+│   ├── annotations.py      # AnnotationModel (per-frame strokes)
+│   ├── timeline.py         # Multi-source Timeline + SourceClip
+│   ├── settings.py         # QSettings + hotkey defaults
+│   ├── export.py           # ffmpeg command builder
+│   └── project.py          # Save/load .kproj
+└── api/
+    ├── server.py           # TCP JSON command server (port 18765)
+    └── client.py           # Stdlib-only client lib for DCCs
+
+scripts/
+├── maya_sync.py            # Maya scriptJob → push frame to KPro
+└── blender_sync.py         # Blender frame_change_post handler
 ```
 
-## Known limitations (current iteration)
+## Maya / Blender sync
 
-- Single source only (multi-source timeline coming next).
-- No A/B compare yet.
-- No export-to-video (planned via ffmpeg).
-- "Ping-pong" loop mode currently behaves as loop (mpv has no native reverse playback for real-time audio).
-- Wayland: tested via XWayland. Native Wayland embedding requires `mpv` render API integration — planned.
+Start KPro, then in Maya's script editor:
+
+```python
+import sys; sys.path.insert(0, "/path/to/keyframe-pro-linux/scripts")
+import maya_sync
+maya_sync.start_sync()                         # current frame → KPro
+maya_sync.send_playblast("/tmp/blast.mp4")     # load a playblast
+maya_sync.bookmark_current_frame("Beat 1")
+```
+
+In Blender:
+
+```python
+import sys; sys.path.insert(0, "/path/to/keyframe-pro-linux/scripts")
+import blender_sync
+blender_sync.start_sync()
+```
+
+## Known limitations
+
+- Wipe compare uses widget clipping; a true GPU shader compare (with transparency mode) would need both players to render through the libmpv render API and composite — planned.
+- "Ping-pong" loop mode currently behaves as loop (mpv has no native reverse-with-audio).
+- `wayland_player.py` is experimental — depends on python-mpv exposing `MpvRenderContext`.
 
 ## License
 
