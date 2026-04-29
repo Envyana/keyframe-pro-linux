@@ -5,6 +5,11 @@ from typing import Optional
 from PySide6.QtCore import QObject, Signal
 
 
+KIND_FRAME = "frame"
+KIND_RANGE = "range"
+KIND_ANNOTATION = "annotation"
+
+
 @dataclass
 class Bookmark:
     frame_in: int
@@ -12,6 +17,7 @@ class Bookmark:
     name: str = ""
     color: str = "#ffcc00"
     note: str = ""
+    kind: str = KIND_FRAME   # 'frame' | 'range' | 'annotation'
 
     @property
     def is_range(self) -> bool:
@@ -28,6 +34,7 @@ class Bookmark:
             name=d.get("name", ""),
             color=d.get("color", "#ffcc00"),
             note=d.get("note", ""),
+            kind=d.get("kind", KIND_FRAME),
         )
 
 
@@ -79,6 +86,39 @@ class BookmarkModel(QObject):
         if prev is None and self._items:
             return self._items[-1]
         return prev
+
+    def update_at(self, index: int, bm: Bookmark) -> None:
+        if 0 <= index < len(self._items):
+            self._items[index] = bm
+            self._items.sort(key=lambda b: b.frame_in)
+            self.changed.emit()
+
+    def sync_from_annotations(self, annotated_frames: list[int]) -> int:
+        """Add an annotation-kind bookmark for each annotated frame that
+        doesn't already have a bookmark of any kind. Returns count added.
+        Existing annotation bookmarks for frames no longer annotated are
+        removed so the list stays in sync."""
+        existing_frames = {b.frame_in for b in self._items}
+        added = 0
+        for f in annotated_frames:
+            if f not in existing_frames:
+                self._items.append(Bookmark(
+                    frame_in=f,
+                    kind=KIND_ANNOTATION,
+                    color="#22cc77",
+                    name="Annotation",
+                ))
+                added += 1
+        # Drop annotation-kind bookmarks whose frame is no longer annotated
+        annotated_set = set(annotated_frames)
+        self._items = [
+            b for b in self._items
+            if b.kind != KIND_ANNOTATION or b.frame_in in annotated_set
+        ]
+        self._items.sort(key=lambda b: b.frame_in)
+        if added or True:
+            self.changed.emit()
+        return added
 
     def to_list(self) -> list[dict]:
         return [b.to_dict() for b in self._items]
