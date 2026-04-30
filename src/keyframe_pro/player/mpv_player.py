@@ -116,6 +116,41 @@ class MpvPlayer(QWidget):
             # mpv needs the file loaded first before we can add an external
             # audio track; defer slightly.
             QTimer.singleShot(250, lambda p=audio_override: self._set_audio_override(p))
+        # Poll mpv for duration/fps until both are known. Property observers
+        # are sometimes flaky on short clips or unusual containers, so we
+        # backstop them with an explicit poll. Stops on its own once both
+        # values arrive.
+        self._kick_metadata_poll()
+
+    def _kick_metadata_poll(self) -> None:
+        attempts = {"n": 0}
+
+        def poll():
+            attempts["n"] += 1
+            updated = False
+            try:
+                d = self._mpv.duration
+                if d is not None and float(d) > 0 and abs(float(d) - self._duration) > 0.01:
+                    self._duration = float(d)
+                    self.duration_changed.emit(self._duration)
+                    updated = True
+            except Exception:
+                pass
+            try:
+                f = (self._mpv.container_fps
+                     or self._mpv.estimated_vf_fps
+                     or 0)
+                if f and float(f) > 0 and abs(float(f) - self._fps) > 0.01:
+                    self._fps = float(f)
+                    self.fps_changed.emit(self._fps)
+                    updated = True
+            except Exception:
+                pass
+            done = self._duration > 0 and self._fps > 0
+            if not done and attempts["n"] < 40:
+                QTimer.singleShot(250, poll)
+
+        QTimer.singleShot(250, poll)
 
     def _set_audio_override(self, audio_path: str) -> None:
         try:

@@ -37,6 +37,16 @@ class TransportBar(QWidget):
                 b.setToolTip(tip)
             return b
 
+        # Big, always-visible frame/time readout
+        self.lbl_frame = QLabel("Frame: 0 / 0    0.00s")
+        self.lbl_frame.setStyleSheet(
+            "QLabel { font-family: monospace; font-weight: bold; color: #ffd400; "
+            "padding: 2px 8px; border: 1px solid #444; border-radius: 3px; "
+            "background: #1a1a1f; }"
+        )
+        layout.addWidget(self.lbl_frame)
+        layout.addSpacing(6)
+
         self.btn_back10 = btn("⏪", "Back 10 frames (Shift+Left)")
         self.btn_back1 = btn("◀", "Previous frame (Left)")
         self.btn_play = btn("▶", "Play / Pause (Space)")
@@ -124,6 +134,15 @@ class TransportBar(QWidget):
 
     def set_play_icon(self, playing: bool) -> None:
         self.btn_play.setText("⏸" if playing else "▶")
+
+    def set_frame_text(self, frame: int, total: int, time_sec: float, fps: float) -> None:
+        if fps <= 0:
+            self.lbl_frame.setText(f"Frame: {frame} / {max(0, total - 1)}    {time_sec:.2f}s")
+        else:
+            self.lbl_frame.setText(
+                f"Frame: {frame} / {max(0, total - 1)}    "
+                f"{time_sec:.2f}s @ {fps:.2f}fps"
+            )
 
     def _on_mute(self, checked: bool) -> None:
         self.btn_mute.setText("🔇" if checked else "🔊")
