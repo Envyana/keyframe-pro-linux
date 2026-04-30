@@ -1,18 +1,21 @@
-# Keyframe Pro Linux — Windows installer (PowerShell)
+# Keyframe Pro Linux — Windows installer (PowerShell 5.1+ compatible)
 #
 # Usage (open PowerShell in the project folder):
-#     .\install-deps.ps1
+#     powershell -ExecutionPolicy Bypass -File .\install-deps.ps1
 #
-# If you get "running scripts is disabled on this system", run once:
+# Or once:
 #     Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+#     .\install-deps.ps1
 
 $ErrorActionPreference = "Stop"
 
-Write-Host "Keyframe Pro Linux — Windows setup" -ForegroundColor Cyan
+Write-Host "Keyframe Pro Linux - Windows setup" -ForegroundColor Cyan
 
-# 1) Python check
-$py = (Get-Command python -ErrorAction SilentlyContinue) `
-    ?? (Get-Command py -ErrorAction SilentlyContinue)
+# 1) Python check (works on PS 5.1, no null-coalescing operator)
+$py = Get-Command python -ErrorAction SilentlyContinue
+if (-not $py) {
+    $py = Get-Command py -ErrorAction SilentlyContinue
+}
 if (-not $py) {
     Write-Host "Python is not installed. Install Python 3.10+ from python.org first." -ForegroundColor Red
     Write-Host "  https://www.python.org/downloads/windows/"
@@ -26,15 +29,18 @@ $dllNames = @("libmpv-2.dll", "mpv-2.dll", "libmpv-1.dll", "mpv-1.dll")
 $foundDll = $null
 foreach ($name in $dllNames) {
     $cmd = Get-Command $name -ErrorAction SilentlyContinue
-    if ($cmd) { $foundDll = $cmd.Source; break }
+    if ($cmd) {
+        $foundDll = $cmd.Source
+        break
+    }
 }
 if (-not $foundDll) {
     Write-Host ""
     Write-Host "libmpv DLL not found on PATH." -ForegroundColor Yellow
     Write-Host "Install mpv:" -ForegroundColor Yellow
-    Write-Host "  Option A — winget:    winget install mpv.net"
-    Write-Host "  Option B — chocolatey: choco install mpv"
-    Write-Host "  Option C — manual:    download mpv from https://mpv.io/installation/"
+    Write-Host "  Option A - winget:    winget install mpv.net"
+    Write-Host "  Option B - chocolatey: choco install mpv"
+    Write-Host "  Option C - manual:    download mpv from https://mpv.io/installation/"
     Write-Host "                        and place libmpv-2.dll on PATH"
     Write-Host ""
     Write-Host "After installing, re-run this script."
@@ -48,9 +54,10 @@ if (-not $ffmpeg) {
     Write-Host ""
     Write-Host "ffmpeg not found on PATH (needed for export + source thumbnails)." -ForegroundColor Yellow
     Write-Host "Install: winget install Gyan.FFmpeg   (or:   choco install ffmpeg)"
-    Write-Host "App will still launch and play video — only export/thumbnails will be disabled."
+    Write-Host "App will still launch and play video - only export/thumbnails will be disabled."
     Write-Host ""
-} else {
+}
+else {
     Write-Host "Found ffmpeg: $($ffmpeg.Source)"
 }
 
