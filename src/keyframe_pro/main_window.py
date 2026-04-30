@@ -65,20 +65,24 @@ class MainWindow(QMainWindow):
         self.compare_view = CompareView(
             self.player, self.player_b, self.player_c, self.player_d
         )
+        # Allow shrinking even when mpv has a native window; without this the
+        # X11 native subwindow can lock a minimum size and the user can't
+        # resize the main window smaller.
+        self.compare_view.setMinimumSize(1, 1)
+        for p in (self.player, self.player_b, self.player_c, self.player_d):
+            p.setMinimumSize(1, 1)
 
-        # Annotation + HUD overlays sit on top of compare_view
-        self.viewer_container = QWidget()
-        viewer_stack = QStackedLayout(self.viewer_container)
-        viewer_stack.setStackingMode(QStackedLayout.StackAll)
-        viewer_stack.setContentsMargins(0, 0, 0, 0)
-        self.hud = HudOverlay(parent=self.viewer_container)
-        self.overlay = AnnotationOverlay(self.annotations, parent=self.viewer_container)
-        viewer_stack.addWidget(self.hud)
-        viewer_stack.addWidget(self.overlay)
-        viewer_stack.addWidget(self.compare_view)
+        # IMPORTANT: on X11 the mpv players each own a native sub-window,
+        # which "swallows" mouse events from any sibling Qt overlay (the
+        # X server delivers events to the topmost native window, not the
+        # Qt-stacked widget above it). The fix is to parent the overlay
+        # *as a child of the primary mpv player's widget* — children of a
+        # native window do receive events normally.
+        self.overlay = AnnotationOverlay(self.annotations, parent=self.player)
+        self.hud = HudOverlay(parent=self.player)
         self.overlay.raise_()
         self.hud.raise_()
-        self.compare_view.installEventFilter(self)
+        self.player.installEventFilter(self)
 
         # ---------- toolbars / panels ----------
         self.timeline_widget = TimelineWidget()
@@ -96,10 +100,13 @@ class MainWindow(QMainWindow):
         v.setSpacing(0)
         v.addWidget(self.compare_toolbar)
         v.addWidget(self.ann_toolbar)
-        v.addWidget(self.viewer_container, 1)
+        # compare_view IS the viewer container now (no QStackedLayout wrapper);
+        # overlay/HUD are children of player A and float on top.
+        v.addWidget(self.compare_view, 1)
         v.addWidget(self.timeline_widget)
         v.addWidget(self.transport)
         self.setCentralWidget(central)
+        central.setMinimumSize(1, 1)
 
         # ---------- docks ----------
         dock_bm = QDockWidget("Bookmarks", self)
@@ -136,7 +143,18 @@ class MainWindow(QMainWindow):
             p.set_volume(0.0)
             p.set_mute(True)
         self._sync_b: bool = True
-        self._hud_visible: bool = False
+        self._hud_visible: bool = True   # HUD on by default so frame info is visible
+        self.hud.set_visible(True)
+
+        # Track files per player so changing A doesn't clobber a B/C/D the
+        # user explicitly loaded for compare.
+        self._file_a: str | None = None
+        self._file_b: str | None = None
+        self._file_c: str | None = None
+        self._file_d: str | None = None
+        self._b_explicit: bool = False
+        self._c_explicit: bool = False
+        self._d_explicit: bool = False
 
         # ---------- API server ----------
         self.api = CommandServer()
@@ -204,6 +222,7 @@ class MainWindow(QMainWindow):
         m_view.addAction(a_full)
 
         a_hud = QAction("&HUD (frame/time)", self, checkable=True)
+        a_hud.setChecked(True)
         a_hud.toggled.connect(self._toggle_hud)
         m_view.addAction(a_hud)
         self._action_hud = a_hud
@@ -258,9 +277,9 @@ class MainWindow(QMainWindow):
         self.player.fps_changed.connect(self._on_fps)
         self.player.play_state_changed.connect(self.transport.set_play_icon)
 
-        # transport → player A
-        self.transport.play_toggled.connect(self.player.toggle_play)
-        self.transport.step_requested.connect(self.player.step_frame)
+        # transport → player A (and mirror play/pause to B/C/D when synced)
+        self.transport.play_toggled.connect(self._toggle_play_synced)
+        self.transport.step_requested.connect(self._step_synced)
         self.transport.speed_changed.connect(self.player.set_speed)
         self.transport.loop_mode_changed.connect(self.player.set_loop_mode)
         self.transport.audio_offset_changed.connect(self.player.set_audio_offset)
@@ -330,13 +349,13 @@ class MainWindow(QMainWindow):
     # =========================================================
     def _wire_actions(self) -> None:
         self._action_callbacks = {
-            "play_toggle": self.player.toggle_play,
-            "step_back_1": lambda: self.player.step_frame(-1),
-            "step_fwd_1":  lambda: self.player.step_frame(1),
-            "step_back_10": lambda: self.player.step_frame(-10),
-            "step_fwd_10":  lambda: self.player.step_frame(10),
-            "goto_start": lambda: self.player.seek_frame(0),
-            "goto_end":   lambda: self.player.seek_frame(max(0, self.player.total_frames()-1)),
+            "play_toggle": self._toggle_play_synced,
+            "step_back_1": lambda: self._step_synced(-1),
+            "step_fwd_1":  lambda: self._step_synced(1),
+            "step_back_10": lambda: self._step_synced(-10),
+            "step_fwd_10":  lambda: self._step_synced(10),
+            "goto_start": lambda: self._seek_synced(0),
+            "goto_end":   lambda: self._seek_synced(max(0, self.player.total_frames()-1)),
             "set_in":     self._set_in,
             "set_out":    self._set_out,
             "clear_inout": self._clear_inout,
@@ -429,10 +448,14 @@ class MainWindow(QMainWindow):
                 )
                 return
         self._current_file = path
+        self._file_a = path
         self.setWindowTitle(f"Keyframe Pro Linux — {Path(path).name}")
         self.player.load_file(path)
-        if self._sync_b and self.player_b is not None:
+        # Only mirror to B if the user hasn't explicitly loaded a different
+        # file there for compare.
+        if self._sync_b and self.player_b is not None and not self._b_explicit:
             self.player_b.load_file(path)
+            self._file_b = path
         # Reset timeline to a single-clip representation
         self.timeline_model.clear()
         self.timeline_model.add(SourceClip(media_path=path, label=Path(path).name))
@@ -476,15 +499,46 @@ class MainWindow(QMainWindow):
 
     def _load_b(self, path: str) -> None:
         self.player_b.load_file(path)
+        self._file_b = path
+        self._b_explicit = True
+        # B has its own audio for split-compare; let the user hear it.
+        self.player_b.set_mute(False)
+        self.player_b.set_volume(80.0)
         self.lbl_status.setText(f"B = {Path(path).name}")
 
     def _load_c(self, path: str) -> None:
         self.player_c.load_file(path)
+        self._file_c = path
+        self._c_explicit = True
         self.lbl_status.setText(f"C = {Path(path).name}")
 
     def _load_d(self, path: str) -> None:
         self.player_d.load_file(path)
+        self._file_d = path
+        self._d_explicit = True
         self.lbl_status.setText(f"D = {Path(path).name}")
+
+    def _toggle_play_synced(self) -> None:
+        self.player.toggle_play()
+        if self._sync_b:
+            playing = self.player.is_playing()
+            for p in (self.player_b, self.player_c, self.player_d):
+                if playing:
+                    p.play()
+                else:
+                    p.pause()
+
+    def _step_synced(self, n: int) -> None:
+        self.player.step_frame(n)
+        if self._sync_b:
+            for p in (self.player_b, self.player_c, self.player_d):
+                p.step_frame(n)
+
+    def _seek_synced(self, frame: int) -> None:
+        self.player.seek_frame(frame)
+        if self._sync_b:
+            for p in (self.player_b, self.player_c, self.player_d):
+                p.seek_frame(frame)
 
     def _on_mouse_scrub(self, frame: int) -> None:
         if self._sync_b:
@@ -666,12 +720,15 @@ class MainWindow(QMainWindow):
             else:
                 self.player.pause()
         fps = self.player.fps() or 24.0
+        total = self.player.total_frames()
+        time_sec = frame / fps if fps > 0 else 0.0
         # HUD update
-        self.hud.set_state(frame, self.player.total_frames(), fps,
-                           frame / fps if fps > 0 else 0.0)
+        self.hud.set_state(frame, total, fps, time_sec)
+        # Big readout in the transport bar (always visible)
+        self.transport.set_frame_text(frame, total, time_sec, fps)
         self.lbl_status.setText(
-            f"Frame {frame:>5} / {max(0, self.player.total_frames()-1):>5}   "
-            f"{frame/fps:6.2f}s   FPS {fps:.2f}"
+            f"Frame {frame:>5} / {max(0, total - 1):>5}   "
+            f"{time_sec:6.2f}s   FPS {fps:.2f}"
         )
 
     def _on_duration(self, _sec: float) -> None:
@@ -696,12 +753,31 @@ class MainWindow(QMainWindow):
     # view
     # =========================================================
     def _toggle_on_top(self, on: bool) -> None:
-        flags = self.windowFlags()
-        if on:
-            self.setWindowFlags(flags | Qt.WindowStaysOnTopHint)
-        else:
-            self.setWindowFlags(flags & ~Qt.WindowStaysOnTopHint)
+        # Toggling window flags re-creates the native window, which
+        # destroys mpv's wid-embedded subwindow and stops playback. We
+        # save the loaded file + frame, toggle, then re-load and seek so
+        # the user perceives the toggle as transparent.
+        cur_file = self._current_file
+        cur_frame = self.player.current_frame() if cur_file else 0
+        was_playing = self.player.is_playing() if cur_file else False
+        try:
+            self.setWindowFlag(Qt.WindowStaysOnTopHint, bool(on))
+        except Exception:
+            flags = self.windowFlags()
+            if on:
+                self.setWindowFlags(flags | Qt.WindowStaysOnTopHint)
+            else:
+                self.setWindowFlags(flags & ~Qt.WindowStaysOnTopHint)
         self.show()
+        if cur_file:
+            def _restore():
+                self.player.load_file(cur_file)
+                if self._sync_b:
+                    self.player_b.load_file(cur_file)
+                QTimer.singleShot(300, lambda: self.player.seek_frame(cur_frame))
+                if was_playing:
+                    QTimer.singleShot(400, self.player.play)
+            QTimer.singleShot(80, _restore)
 
     def _toggle_on_top_action(self) -> None:
         self._toggle_on_top(not bool(self.windowFlags() & Qt.WindowStaysOnTopHint))
@@ -750,7 +826,7 @@ class MainWindow(QMainWindow):
             self._action_hud.setChecked(on)
         self._hud_visible = bool(on)
         self.hud.set_visible(self._hud_visible)
-        self.hud.setGeometry(self.compare_view.geometry())
+        self.hud.setGeometry(self.player.rect())
         self.hud.raise_()
 
     # =========================================================
@@ -913,28 +989,55 @@ class MainWindow(QMainWindow):
                   ".bmp", ".webp", ".tga"}
 
     def dragEnterEvent(self, ev) -> None:
-        md = ev.mimeData()
-        if md.hasUrls() and any(u.isLocalFile() for u in md.urls()):
-            ev.acceptProposedAction()
+        try:
+            md = ev.mimeData()
+            if md is not None and md.hasUrls() and any(
+                u.isLocalFile() for u in md.urls()
+            ):
+                ev.acceptProposedAction()
+        except Exception:
+            # Never crash on a malformed drag event
+            pass
 
     def dragMoveEvent(self, ev) -> None:
-        ev.acceptProposedAction()
+        try:
+            ev.acceptProposedAction()
+        except Exception:
+            pass
 
     def dropEvent(self, ev) -> None:
-        paths = []
-        for u in ev.mimeData().urls():
-            if u.isLocalFile():
-                p = u.toLocalFile()
-                ext = Path(p).suffix.lower()
-                if ext in self.VIDEO_EXTS or ext in self.IMAGE_EXTS:
-                    paths.append(p)
-        if not paths:
-            return
-        if len(paths) == 1:
-            self.load_video(paths[0])
-        else:
-            self._add_sources(paths)
-        ev.acceptProposedAction()
+        # Defer the actual load to the next event-loop iteration so that
+        # we don't process the file inside the drag-drop callback (which
+        # has been a source of crashes on X11). Also wrap everything in a
+        # try/except so a broken drop never force-closes the app.
+        try:
+            paths: list[str] = []
+            md = ev.mimeData()
+            if md is None:
+                return
+            for u in md.urls():
+                if u.isLocalFile():
+                    p = u.toLocalFile()
+                    ext = Path(p).suffix.lower()
+                    if ext in self.VIDEO_EXTS or ext in self.IMAGE_EXTS:
+                        paths.append(p)
+            ev.acceptProposedAction()
+            if not paths:
+                return
+            QTimer.singleShot(0, lambda ps=paths: self._handle_drop(ps))
+        except Exception as e:
+            self.lbl_status.setText(f"Drop failed: {e}")
+
+    def _handle_drop(self, paths: list[str]) -> None:
+        try:
+            if len(paths) == 1:
+                self.load_video(paths[0])
+            else:
+                self._add_sources(paths)
+        except Exception as e:
+            self.lbl_status.setText(f"Drop failed: {e}")
+            QMessageBox.warning(self, "Drop failed",
+                                f"Could not load dropped files:\n{e}")
 
     # =========================================================
     # clip editor
@@ -977,17 +1080,18 @@ class MainWindow(QMainWindow):
     # overlay sizing / cleanup
     # =========================================================
     def eventFilter(self, obj, ev):
-        if obj is self.compare_view and ev.type() in (ev.Type.Resize, ev.Type.Show):
-            self.overlay.setGeometry(self.compare_view.geometry())
-            self.hud.setGeometry(self.compare_view.geometry())
+        if obj is self.player and ev.type() in (ev.Type.Resize, ev.Type.Show):
+            # overlay & HUD are children of player A; size them to its rect
+            self.overlay.setGeometry(self.player.rect())
+            self.hud.setGeometry(self.player.rect())
             self.overlay.raise_()
             self.hud.raise_()
         return super().eventFilter(obj, ev)
 
     def resizeEvent(self, ev):
         super().resizeEvent(ev)
-        self.overlay.setGeometry(self.compare_view.geometry())
-        self.hud.setGeometry(self.compare_view.geometry())
+        self.overlay.setGeometry(self.player.rect())
+        self.hud.setGeometry(self.player.rect())
         self.overlay.raise_()
         self.hud.raise_()
 
