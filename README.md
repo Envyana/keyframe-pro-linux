@@ -128,13 +128,38 @@ pip install -r requirements.txt
 
 ### Windows
 
-Install [Python 3.11+](https://python.org), install [mpv](https://mpv.io/) and put `mpv-2.dll` (or `libmpv-2.dll`) on your PATH. Then:
+Yes, the app runs natively on Windows — same code, same Qt + libmpv stack.
+Install Python 3.10+, mpv (libmpv DLL), and ffmpeg, then run the bundled
+PowerShell setup script:
 
 ```powershell
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
+# In PowerShell, in the project folder:
+.\install-deps.ps1
+.\run.bat
+.\run.bat C:\path\to\video.mp4
 ```
+
+The script checks for Python, libmpv DLL, and ffmpeg, then creates a venv
+and installs everything. If PowerShell refuses to run scripts, do once:
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+```
+
+#### Manual install on Windows
+
+1. **Python 3.10+** — https://www.python.org/downloads/windows/
+2. **mpv with libmpv** — easiest: `winget install mpv.net` (or `choco install mpv`).
+   Manual: download from https://mpv.io/installation/ and put `libmpv-2.dll`
+   on PATH (or in the same folder as `python.exe` of your venv).
+3. **ffmpeg** — `winget install Gyan.FFmpeg` (needed for export + thumbnails).
+4. Create venv and install:
+   ```powershell
+   python -m venv .venv
+   .\.venv\Scripts\activate
+   pip install -r requirements.txt
+   pip install -e .
+   python -m keyframe_pro
+   ```
 
 ## Run
 
